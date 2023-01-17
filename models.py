@@ -92,7 +92,7 @@ class PrototypeModel(nn.Module):
         seq_len = delta_t.shape[1] + 1
         padding = torch.ones(batch_size, self.padding_len, device=device)
         delta_t = torch.cat([padding, delta_t, padding], dim=1)
-        attention_weights = deque([torch.ones(batch_size, seq_len)])
+        attention_weights = deque([torch.ones(batch_size, seq_len, device=device)])
 
         forward_elapsed_t = torch.zeros(batch_size, seq_len, device=device)
         backward_elapsed_t = torch.zeros(batch_size, seq_len, device=device)
