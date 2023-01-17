@@ -58,6 +58,7 @@ class PrototypeModel(nn.Module):
             delta_t_logits=delta_t_logits,
             delta_t=delta_t,
             temporal_attention_weights=temporal_attention_weights,
+            reconstructed_traj=reconstructed_traj,
         )
         return reconstructed_traj, info
 
@@ -65,6 +66,16 @@ class PrototypeModel(nn.Module):
         reconstructed_traj, info = self.forward(traj)
         reconstruction_loss = nn.functional.mse_loss(reconstructed_traj, traj)
         time_loss = info['delta_t'].mean()
+
+        model_loss = self.reconstruction_loss_weight * reconstruction_loss + self.time_loss_weight * time_loss
+        metrics = dict(
+            loss=model_loss.item(),
+            reconstruction_loss=reconstruction_loss.item(),
+            time_loss=time_loss.item(),
+            average_compression=1 / time_loss.item(),
+        )
+
+        return model_loss, metrics, info
 
     def set_temperature(self, temperature):
         self.temperature = temperature
