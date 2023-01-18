@@ -10,6 +10,8 @@ class PrototypeModel(nn.Module):
         seq_len=128,
         latent_dim=4,
         max_subseq_len=51,
+        init_temperature=1.0,
+        init_hard=False,
         reconstruction_loss_weight=1.0,
         time_loss_weight=0.0,
     ):
@@ -26,8 +28,11 @@ class PrototypeModel(nn.Module):
         self.mlp_encoder_2 = StandardMLP(input_dim=256, layer_sizes=(256,), output_dim=latent_dim)
         self.mlp_decoder = StandardMLP(input_dim=latent_dim, layer_sizes=(256,), output_dim=data_dim)
 
-        self.set_temperature(1.0)
-        self.soft_sample()
+        self.set_temperature(init_temperature)
+        if init_hard:
+            self.hard_sample()
+        else:
+            self.soft_sample()
         self.latent_dim = latent_dim
         self.seq_len = seq_len
         self.max_subseq_len = max_subseq_len
@@ -75,7 +80,7 @@ class PrototypeModel(nn.Module):
             loss=model_loss.item(),
             reconstruction_loss=reconstruction_loss.item(),
             time_loss=time_loss.item(),
-            average_compression=1 / time_loss.item(),
+            average_compression=1 / max(time_loss.item(), 1e-5),
         )
 
         return model_loss, metrics, info
@@ -112,7 +117,7 @@ class PrototypeModel(nn.Module):
             attention_weights.appendleft(torch.maximum(1 - backward_elapsed_t, torch.zeros_like(backward_elapsed_t)))
 
         attention_weights = torch.stack(list(attention_weights), dim=-1)
-        attention_weights = torch.nn.functional.softmax(attention_weights, dim=-1)
+        attention_weights = attention_weights / torch.sum(attention_weights, dim=-1, keepdim=True)
         return attention_weights
 
 def test_temporal_attention():

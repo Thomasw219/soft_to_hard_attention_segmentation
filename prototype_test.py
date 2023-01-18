@@ -78,7 +78,6 @@ def visualize(info, logger, global_step, n_samples=3):
             plot_ax.legend()
             delta_t_ax.legend()
             delta_t_logit_ax.legend()
-            latent_features_ax.legend()
 
     logger.add_figure('reconstruction', plot_fig, global_step)
     logger.add_figure('delta_t', delta_t_fig, global_step)
@@ -104,10 +103,12 @@ if __name__ == '__main__':
             latent_dim=4,
             max_subseq_len=129,
             reconstruction_loss_weight=1.0,
-            time_loss_weight=0.3,
+            time_loss_weight=0.2,
+            init_temperature=1.0,
+            init_hard=False,
         ),
         optimizer=dict(
-            lr=1e-3,
+            lr=3e-4,
             weight_decay=1e-5,
         ),
         dataset=dict(
