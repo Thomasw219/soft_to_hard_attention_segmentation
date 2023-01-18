@@ -36,7 +36,7 @@ class FixedSizePiecewiseSine(PiecewiseSineBase):
             l = np.minimum(self.piece_length, self.signal_length - idx)
             c = np.random.randint(0, 2)
             if c == 0:
-                signal[idx:idx+l] = np.sin(np.linspace(0, 2 * np.pi, l))
+                signal[idx:idx+l] = np.sin(np.linspace(0, 2 * np.pi, self.piece_length))[:l]
             elif c == 1:
                 signal[idx:idx+l] = 0
             idx += l
