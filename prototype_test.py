@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from data import FixedSizePiecewiseSine
 from models import PrototypeModel
+from utils import LinearScheduler
 
 def test_prototype(cfg):
     np.random.seed(cfg['np_seed'])
@@ -19,6 +20,7 @@ def test_prototype(cfg):
     model = PrototypeModel(data_dim=1, seq_len=cfg['dataset']['signal_length'], **cfg['model'])
     model.to(cfg['device'])
     optimizer = torch.optim.Adam(model.parameters(), **cfg['optimizer'])
+    temp_scheduler = LinearScheduler(**cfg['temp_scheduler'])
 
     timestring = datetime.now(tz=timezone(timedelta(hours=-5))).strftime("_%m-%d-%Y_%H-%M-%S") # EST, No daylight savings
     logger = SummaryWriter(os.path.join(cfg['log_dir'], cfg['name'] + timestring))
@@ -27,6 +29,9 @@ def test_prototype(cfg):
 
     epoch_steps = len(dataloader)
     for epoch in tqdm(range(cfg['epochs']), desc='Epoch', total=cfg['epochs'], position=0):
+        temp = temp_scheduler.get_value(epoch)
+        model.set_temperature(temp)
+        logger.add_scalar('train/temp', temp, epoch)
         for i, traj in tqdm(enumerate(dataloader), desc='Batch', position=1, total=len(dataloader), leave=False):
             traj = traj.to(device=cfg['device'], dtype=torch.float32)
             global_step = i + epoch * epoch_steps
@@ -91,7 +96,7 @@ def visualize(info, logger, global_step, n_samples=3):
 
 if __name__ == '__main__':
     cfg = dict(
-        log_dir='logs/prototype',
+        log_dir='logs/prototype_temp_anneal',
         name='test',
         device='cuda:0',
         log_every=50,
@@ -101,15 +106,20 @@ if __name__ == '__main__':
         grad_clip=50.0,
         model=dict(
             latent_dim=4,
-            max_subseq_len=129,
+            max_subseq_len=257,
             reconstruction_loss_weight=1.0,
-            time_loss_weight=0.2,
-            init_temperature=1.0,
-            init_hard=False,
+            time_loss_weight=0.5,
+            time_gradient_scalar=0.01,
         ),
         optimizer=dict(
-            lr=3e-4,
+            lr=1e-4,
             weight_decay=1e-5,
+        ),
+        temp_scheduler=dict(
+            start_value=1.0,
+            end_value=0.01,
+            start_step=25,
+            end_step=75,
         ),
         dataset=dict(
             dataset_size=10000,

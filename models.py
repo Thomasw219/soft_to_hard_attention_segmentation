@@ -14,6 +14,7 @@ class PrototypeModel(nn.Module):
         init_hard=False,
         reconstruction_loss_weight=1.0,
         time_loss_weight=0.0,
+        time_gradient_scalar=0.1,
     ):
         super().__init__()
 
@@ -40,6 +41,7 @@ class PrototypeModel(nn.Module):
         self.padding_len = self.half_context_len
         self.reconstruction_loss_weight = reconstruction_loss_weight
         self.time_loss_weight = time_loss_weight
+        self.time_gradient_scalar = time_gradient_scalar
 
     def forward(self, traj):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
@@ -50,6 +52,7 @@ class PrototypeModel(nn.Module):
         encoded_feats = self.mlp_encoder_1(encoded_feats)
         delta_t_logits = self.delta_t_logit_func(encoded_feats)[:, :-1, :]
         delta_t = nn.functional.gumbel_softmax(delta_t_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
+        delta_t.register_hook(lambda grad: grad * self.time_gradient_scalar)
         temporal_attention_weights = self.get_temporal_attention_weights(delta_t)
 
         encoded_feats = encoded_feats + self.encoder_positional_encoding
