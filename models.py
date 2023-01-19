@@ -22,11 +22,12 @@ class PrototypeModel(nn.Module):
         self.conv_encoder = nn.Conv1d(data_dim, 20, kernel_size=21, padding='same')
         self.rnn_encoder = nn.GRU(input_size=20, hidden_size=20, bidirectional=True, batch_first=True)
 
-        self.mlp_encoder_1 = StandardMLP(input_dim=40, layer_sizes=(256,), output_dim=256)
-        self.delta_t_logit_func = StandardMLP(input_dim=256, layer_sizes=(256, 256), output_dim=2)
+        self.mlp_embed_encoder = StandardMLP(input_dim=data_dim, layer_sizes=(256,), output_dim=256)
         self.encoder_positional_encoding = nn.Parameter(torch.randn(1, seq_len, 256))
         self.decoder_positional_encoding = nn.Parameter(torch.randn(1, seq_len, latent_dim))
-        self.mlp_encoder_2 = StandardMLP(input_dim=256, layer_sizes=(256,), output_dim=latent_dim)
+        self.transformer_encoder = nn.TransformerEncoderLayer(256, 4, 512, batch_first=True)
+        self.delta_t_mlp = StandardMLP(input_dim=256, layer_sizes=(256,), output_dim=2)
+        self.mlp_latent_encoder = StandardMLP(input_dim=256, layer_sizes=(256,), output_dim=latent_dim)
         self.mlp_decoder = StandardMLP(input_dim=latent_dim, layer_sizes=(256,), output_dim=data_dim)
 
         self.set_temperature(init_temperature)
@@ -47,16 +48,14 @@ class PrototypeModel(nn.Module):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
         assert traj.shape[1] == self.seq_len, "Trajectories must be of length {}".format(self.seq_len)
         batch_size = traj.shape[0]
-        encoded_feats = self.conv_encoder(traj.transpose(1, 2)).transpose(1, 2)
-        encoded_feats = self.rnn_encoder(encoded_feats)[0]
-        encoded_feats = self.mlp_encoder_1(encoded_feats)
-        delta_t_logits = self.delta_t_logit_func(encoded_feats)[:, :-1, :]
+        encoded_feats = self.mlp_embed_encoder(traj)
+        encoded_feats = encoded_feats + self.encoder_positional_encoding
+        delta_t_logits = self.delta_t_mlp(self.transformer_encoder(encoded_feats))[:, :-1, :]
         delta_t = nn.functional.gumbel_softmax(delta_t_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
         delta_t.register_hook(lambda grad: grad * self.time_gradient_scalar)
         temporal_attention_weights = self.get_temporal_attention_weights(delta_t)
 
-        encoded_feats = encoded_feats + self.encoder_positional_encoding
-        encoded_feats = self.mlp_encoder_2(encoded_feats)
+        encoded_feats = self.mlp_latent_encoder(encoded_feats)
 
         unfolded_feats = nn.Unfold(kernel_size=(self.max_subseq_len, 1), padding=(self.padding_len, 0))(encoded_feats.transpose(1, 2).unsqueeze(-1))
         unfolded_feats = unfolded_feats.reshape(batch_size, self.latent_dim, self.max_subseq_len, self.seq_len).permute(0, 3, 2, 1)

@@ -97,7 +97,7 @@ def visualize(info, logger, global_step, n_samples=3):
 if __name__ == '__main__':
     cfg = dict(
         log_dir='logs/prototype_temp_anneal',
-        name='test',
+        name='test_transformer_segmentation',
         device='cuda:0',
         log_every=50,
         viz_every=100,
