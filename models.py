@@ -90,6 +90,9 @@ class PrototypeModel(nn.Module):
     def set_temperature(self, temperature):
         self.temperature = temperature
 
+    def set_time_loss_weight(self, time_loss_weight):
+        self.time_loss_weight = time_loss_weight
+
     def hard_sample(self):
         self.sample = True
 

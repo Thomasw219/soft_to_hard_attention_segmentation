@@ -21,6 +21,7 @@ def test_prototype(cfg):
     model.to(cfg['device'])
     optimizer = torch.optim.Adam(model.parameters(), **cfg['optimizer'])
     temp_scheduler = LinearScheduler(**cfg['temp_scheduler'])
+    time_loss_weight_scheduler = LinearScheduler(**cfg['time_loss_weight_scheduler'])
 
     timestring = datetime.now(tz=timezone(timedelta(hours=-5))).strftime("_%m-%d-%Y_%H-%M-%S") # EST, No daylight savings
     logger = SummaryWriter(os.path.join(cfg['log_dir'], cfg['name'] + timestring))
@@ -28,10 +29,14 @@ def test_prototype(cfg):
     logger.add_text('model', str(model))
 
     epoch_steps = len(dataloader)
+    global_step = 0
     for epoch in tqdm(range(cfg['epochs']), desc='Epoch', total=cfg['epochs'], position=0):
         temp = temp_scheduler.get_value(epoch)
         model.set_temperature(temp)
-        logger.add_scalar('train/temp', temp, epoch)
+        logger.add_scalar('train/temp', temp, global_step)
+        time_loss_weight = time_loss_weight_scheduler.get_value(epoch)
+        model.set_time_loss_weight(time_loss_weight)
+        logger.add_scalar('train/time_loss_weight', time_loss_weight, global_step)
         for i, traj in tqdm(enumerate(dataloader), desc='Batch', position=1, total=len(dataloader), leave=False):
             traj = traj.to(device=cfg['device'], dtype=torch.float32)
             global_step = i + epoch * epoch_steps
@@ -97,7 +102,7 @@ def visualize(info, logger, global_step, n_samples=3):
 if __name__ == '__main__':
     cfg = dict(
         log_dir='logs/prototype_temp_anneal',
-        name='test_transformer_segmentation',
+        name='test_transformer_segmentation_anneal_time_loss_weight',
         device='cuda:0',
         log_every=50,
         viz_every=100,
@@ -108,7 +113,6 @@ if __name__ == '__main__':
             latent_dim=4,
             max_subseq_len=257,
             reconstruction_loss_weight=1.0,
-            time_loss_weight=0.5,
             time_gradient_scalar=0.01,
         ),
         optimizer=dict(
@@ -120,6 +124,12 @@ if __name__ == '__main__':
             end_value=0.01,
             start_step=25,
             end_step=75,
+        ),
+        time_loss_weight_scheduler=dict(
+            start_value=0.0,
+            end_value=1.0,
+            start_step=0,
+            end_step=25,
         ),
         dataset=dict(
             dataset_size=10000,
