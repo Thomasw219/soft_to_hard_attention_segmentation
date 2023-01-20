@@ -10,17 +10,20 @@ from tqdm import tqdm
 
 from data import FixedSizePiecewiseSine
 from models import PrototypeModel
-from utils import LinearScheduler
+from utils import LinearScheduler, LogarithmicScheduler
 
 def test_prototype(cfg):
     np.random.seed(cfg['np_seed'])
-    dataset = FixedSizePiecewiseSine(**cfg['dataset'])
-    dataloader = DataLoader(dataset, **cfg['dataloader'])
+    train_dataset = FixedSizePiecewiseSine(**cfg['train_dataset'])
+    train_dataloader = DataLoader(train_dataset, **cfg['dataloader'])
 
-    model = PrototypeModel(data_dim=1, seq_len=cfg['dataset']['signal_length'], **cfg['model'])
+    test_dataset = FixedSizePiecewiseSine(**cfg['test_dataset'])
+    test_dataloader = DataLoader(test_dataset, **cfg['dataloader'])
+
+    model = PrototypeModel(data_dim=1, seq_len=cfg['train_dataset']['signal_length'], **cfg['model'])
     model.to(cfg['device'])
     optimizer = torch.optim.Adam(model.parameters(), **cfg['optimizer'])
-    temp_scheduler = LinearScheduler(**cfg['temp_scheduler'])
+    temp_scheduler = LogarithmicScheduler(**cfg['temp_scheduler'])
     time_loss_weight_scheduler = LinearScheduler(**cfg['time_loss_weight_scheduler'])
 
     timestring = datetime.now(tz=timezone(timedelta(hours=-5))).strftime("_%m-%d-%Y_%H-%M-%S") # EST, No daylight savings
@@ -28,7 +31,7 @@ def test_prototype(cfg):
     logger.add_text('config', str(cfg))
     logger.add_text('model', str(model))
 
-    epoch_steps = len(dataloader)
+    epoch_steps = len(train_dataloader)
     global_step = 0
     for epoch in tqdm(range(cfg['epochs']), desc='Epoch', total=cfg['epochs'], position=0):
         temp = temp_scheduler.get_value(epoch)
@@ -37,7 +40,8 @@ def test_prototype(cfg):
         time_loss_weight = time_loss_weight_scheduler.get_value(epoch)
         model.set_time_loss_weight(time_loss_weight)
         logger.add_scalar('train/time_loss_weight', time_loss_weight, global_step)
-        for i, traj in tqdm(enumerate(dataloader), desc='Batch', position=1, total=len(dataloader), leave=False):
+        model.train()
+        for i, traj in tqdm(enumerate(train_dataloader), desc='Train Batch', position=1, total=len(train_dataloader), leave=False):
             traj = traj.to(device=cfg['device'], dtype=torch.float32)
             global_step = i + epoch * epoch_steps
 
@@ -54,12 +58,27 @@ def test_prototype(cfg):
                     logger.add_scalar(k, v, global_step)
 
             if global_step % cfg['viz_every'] == 0:
-                visualize(info, logger, global_step)
+                visualize(info, logger, global_step, prefix='train')
+
+        with torch.no_grad():
+            model.eval()
+            metric_list = []
+            for i, traj in tqdm(enumerate(test_dataloader), desc='Test Batch', position=1, total=len(test_dataloader), leave=False):
+                traj = traj.to(device=cfg['device'], dtype=torch.float32)
+                loss, metrics, info = model.get_loss(traj)
+
+            metric_list.append(metrics)
+            metrics = {k : np.mean([m[k] for m in metric_list]) for k in metric_list[0].keys()}
+            metrics = {f'test/{k}' : v for k, v in metrics.items()}
+            for k, v in metrics.items():
+                logger.add_scalar(k, v, global_step)
+
+            visualize(info, logger, global_step, prefix='test')
 
 def plt_prep(tensor):
     return tensor.detach().cpu().numpy().squeeze()
 
-def visualize(info, logger, global_step, n_samples=3):
+def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     plot_fig = plt.figure(0)
     delta_t_fig = plt.figure(1)
     delta_t_logit_fig = plt.figure(2)
@@ -89,10 +108,10 @@ def visualize(info, logger, global_step, n_samples=3):
             delta_t_ax.legend()
             delta_t_logit_ax.legend()
 
-    logger.add_figure('reconstruction', plot_fig, global_step)
-    logger.add_figure('delta_t', delta_t_fig, global_step)
-    logger.add_figure('delta_t_logit', delta_t_logit_fig, global_step)
-    logger.add_figure('latent_features', latent_features_fig, global_step)
+    logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
+    logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
+    logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
+    logger.add_figure(prefix + '/latent_features', latent_features_fig, global_step)
 
     plot_fig.clf()
     delta_t_fig.clf()
@@ -101,13 +120,13 @@ def visualize(info, logger, global_step, n_samples=3):
 
 if __name__ == '__main__':
     cfg = dict(
-        log_dir='logs/prototype_temp_anneal',
-        name='test_transformer_segmentation_anneal_time_loss_weight',
+        log_dir='logs/prototype_with_eval',
+        name='test',
         device='cuda:0',
         log_every=50,
         viz_every=100,
         np_seed=0,
-        epochs=200,
+        epochs=400,
         grad_clip=50.0,
         model=dict(
             latent_dim=4,
@@ -121,9 +140,9 @@ if __name__ == '__main__':
         ),
         temp_scheduler=dict(
             start_value=1.0,
-            end_value=0.01,
+            end_value=1.0,
             start_step=100,
-            end_step=200,
+            end_step=350,
         ),
         time_loss_weight_scheduler=dict(
             start_value=0.0,
@@ -131,8 +150,13 @@ if __name__ == '__main__':
             start_step=10,
             end_step=10,
         ),
-        dataset=dict(
+        train_dataset=dict(
             dataset_size=10000,
+            piece_length=20,
+            signal_length=128,
+        ),
+        test_dataset=dict(
+            dataset_size=1000,
             piece_length=20,
             signal_length=128,
         ),

@@ -52,7 +52,8 @@ class PrototypeModel(nn.Module):
         encoded_feats = encoded_feats + self.encoder_positional_encoding
         delta_t_logits = self.delta_t_mlp(self.transformer_encoder(encoded_feats))[:, :-1, :]
         delta_t = nn.functional.gumbel_softmax(delta_t_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
-        delta_t.register_hook(lambda grad: grad * self.time_gradient_scalar)
+        if delta_t.requires_grad:
+            delta_t.register_hook(lambda grad: grad * self.time_gradient_scalar)
         temporal_attention_weights = self.get_temporal_attention_weights(delta_t)
 
         encoded_feats = self.mlp_latent_encoder(encoded_feats)
@@ -98,6 +99,17 @@ class PrototypeModel(nn.Module):
 
     def soft_sample(self):
         self.sample = False
+
+    def train(self, mode=True):
+        if mode:
+            self.soft_sample()
+        else:
+            self.hard_sample()
+        super().train(mode)
+
+    def eval(self):
+        self.hard_sample()
+        super().eval()
 
     def get_temporal_attention_weights(self, delta_t):
         device = delta_t.device
