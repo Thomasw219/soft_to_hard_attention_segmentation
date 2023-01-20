@@ -107,13 +107,13 @@ if __name__ == '__main__':
         log_every=50,
         viz_every=100,
         np_seed=0,
-        epochs=100,
+        epochs=200,
         grad_clip=50.0,
         model=dict(
             latent_dim=4,
             max_subseq_len=257,
             reconstruction_loss_weight=1.0,
-            time_gradient_scalar=0.01,
+            time_gradient_scalar=1.0,
         ),
         optimizer=dict(
             lr=1e-4,
@@ -122,14 +122,14 @@ if __name__ == '__main__':
         temp_scheduler=dict(
             start_value=1.0,
             end_value=0.01,
-            start_step=25,
-            end_step=75,
+            start_step=100,
+            end_step=200,
         ),
         time_loss_weight_scheduler=dict(
             start_value=0.0,
-            end_value=1.0,
-            start_step=0,
-            end_step=25,
+            end_value=0.5,
+            start_step=10,
+            end_step=10,
         ),
         dataset=dict(
             dataset_size=10000,

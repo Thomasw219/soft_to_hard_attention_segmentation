@@ -19,5 +19,7 @@ class LinearScheduler(SchedulerBase):
             return self.start_value
         elif step > self.end_step:
             return self.end_value
+        elif step == self.start_step and step == self.end_step:
+            return self.end_value
         else:
             return self.start_value + (self.end_value - self.start_value) * (step - self.start_step) / (self.end_step - self.start_step)
