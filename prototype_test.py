@@ -8,16 +8,16 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from data import FixedSizePiecewiseSine
+from data import ComplicatedSinusoid
 from models import PrototypeModel
 from utils import LinearScheduler, LogarithmicScheduler
 
 def test_prototype(cfg):
     np.random.seed(cfg['np_seed'])
-    train_dataset = FixedSizePiecewiseSine(**cfg['train_dataset'])
+    train_dataset = ComplicatedSinusoid(**cfg['train_dataset'])
     train_dataloader = DataLoader(train_dataset, **cfg['dataloader'])
 
-    test_dataset = FixedSizePiecewiseSine(**cfg['test_dataset'])
+    test_dataset = ComplicatedSinusoid(**cfg['test_dataset'])
     test_dataloader = DataLoader(test_dataset, **cfg['dataloader'])
 
     model = PrototypeModel(data_dim=1, seq_len=cfg['train_dataset']['signal_length'], **cfg['model'])
@@ -86,8 +86,12 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     for i in range(n_samples):
         # Plot ground truth and reconstruction for n_samples
         plot_ax = plot_fig.add_subplot(n_samples, 1, i+1)
-        plot_ax.plot(plt_prep(info['ground_truth_traj'][i]), label='ground truth', c='b')
-        plot_ax.plot(plt_prep(info['reconstructed_traj'][i]), label='reconstruction', c='g')
+        gt_traj = plt_prep(info['ground_truth_traj'][i])
+        recon_traj = plt_prep(info['reconstructed_traj'][i])
+        plot_ax.plot(gt_traj, label='ground truth', c='b')
+        plot_ax.plot(recon_traj, label='reconstruction', c='g')
+        plot_ax.set_ylim(np.min(np.concatenate([-1 * np.ones_like(gt_traj), gt_traj, recon_traj])),
+                         np.max(np.concatenate([np.ones_like(gt_traj), gt_traj, recon_traj])))
 
         # Plot delta_t for sequence
         delta_t_ax = delta_t_fig.add_subplot(n_samples, 1, i+1)
@@ -121,12 +125,12 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
 if __name__ == '__main__':
     cfg = dict(
         log_dir='logs/prototype_with_eval',
-        name='test',
+        name='test_complicated_sinusoid',
         device='cuda:0',
         log_every=50,
         viz_every=100,
         np_seed=0,
-        epochs=400,
+        epochs=500,
         grad_clip=50.0,
         model=dict(
             latent_dim=4,
@@ -135,29 +139,27 @@ if __name__ == '__main__':
             time_gradient_scalar=1.0,
         ),
         optimizer=dict(
-            lr=1e-4,
+            lr=3e-4,
             weight_decay=1e-5,
         ),
         temp_scheduler=dict(
-            start_value=1.0,
-            end_value=1.0,
-            start_step=100,
-            end_step=350,
+            start_value=5.0,
+            end_value=0.25,
+            start_step=250,
+            end_step=500,
         ),
         time_loss_weight_scheduler=dict(
             start_value=0.0,
-            end_value=0.5,
+            end_value=0.10,
             start_step=10,
             end_step=10,
         ),
         train_dataset=dict(
             dataset_size=10000,
-            piece_length=20,
             signal_length=128,
         ),
         test_dataset=dict(
             dataset_size=1000,
-            piece_length=20,
             signal_length=128,
         ),
         dataloader=dict(

@@ -2,6 +2,26 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+class OrnsteinUhlenbeckProcess:
+    def __init__(self, dim, theta, sigma, dt, mu=0):
+        self.dim = dim
+        self.theta = theta
+        self.sigma = sigma
+        self.dt = dt
+        self.mu = mu
+        self.reset()
+
+    def step(self):
+        self.x_t = (
+            self.x_t
+            + self.theta * (self.mu - self.x_t) * self.dt
+            + self.sigma * np.sqrt(self.dt) * np.random.randn(self.dim)
+        )
+        return self.x_t
+
+    def reset(self, x_t=None):
+        self.x_t = x_t if x_t is not None else np.random.randn(self.dim) * self.sigma + self.mu
+
 class PiecewiseSineBase(ABC):
     def __init__(
         self,
@@ -28,7 +48,6 @@ class FixedSizePiecewiseSine(PiecewiseSineBase):
         super().__init__(signal_length=signal_length, dataset_size=dataset_size)
         self.piece_length = piece_length
 
-
     def __getitem__(self, index):
         signal = np.empty(self.signal_length)
         idx = 0
@@ -37,6 +56,53 @@ class FixedSizePiecewiseSine(PiecewiseSineBase):
             c = np.random.randint(0, 2)
             if c == 0:
                 signal[idx:idx+l] = np.sin(np.linspace(0, 2 * np.pi, self.piece_length))[:l]
+            elif c == 1:
+                signal[idx:idx+l] = 0
+            idx += l
+        return signal.reshape((self.signal_length, 1))
+
+class SinusoidAndRandom(PiecewiseSineBase):
+    def __init__(
+        self,
+        signal_length=128,
+        dataset_size=1000,
+    ):
+        super().__init__(signal_length=signal_length, dataset_size=dataset_size)
+
+    def __getitem__(self, index):
+        signal = np.empty(self.signal_length)
+        idx = 0
+        while idx < self.signal_length:
+            l = np.minimum(np.random.randint(25, 40), self.signal_length - idx)
+            c = np.random.randint(0, 3)
+            if c == 0:
+                signal[idx:idx+l] = np.random.uniform(-1, 1) * np.sin(np.linspace(0, np.random.choice([0, 1, 2, 3, 4]) * np.pi, l) + np.random.choice([0, np.pi]))[:l]
+            elif c == 1:
+                signal[idx:idx+l] = 0
+            elif c == 2:
+                proc = OrnsteinUhlenbeckProcess(1, 0.03, 0.1, 3)
+                proc.reset(x_t=0)
+                for i in range(l):
+                    signal[idx + i] = proc.step()
+            idx += l
+        return signal.reshape((self.signal_length, 1))
+
+class ComplicatedSinusoid(PiecewiseSineBase):
+    def __init__(
+        self,
+        signal_length=128,
+        dataset_size=1000,
+    ):
+        super().__init__(signal_length=signal_length, dataset_size=dataset_size)
+
+    def __getitem__(self, index):
+        signal = np.empty(self.signal_length)
+        idx = 0
+        while idx < self.signal_length:
+            l = np.minimum(np.random.randint(25, 40), self.signal_length - idx)
+            c = np.random.randint(0, 2)
+            if c == 0:
+                signal[idx:idx+l] = np.random.uniform(-1, 1) * np.sin(np.linspace(0, np.random.choice([0, 1, 2, 3, 4]) * np.pi, l) + np.random.choice([0, np.pi]))[:l]
             elif c == 1:
                 signal[idx:idx+l] = 0
             idx += l
