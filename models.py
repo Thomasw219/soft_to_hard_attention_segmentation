@@ -9,6 +9,7 @@ class PrototypeModel(nn.Module):
         data_dim=1,
         seq_len=128,
         latent_dim=4,
+        positional_encoding_dim=128,
         max_subseq_len=51,
         init_temperature=1.0,
         init_hard=False,
@@ -22,13 +23,12 @@ class PrototypeModel(nn.Module):
         self.conv_encoder = nn.Conv1d(data_dim, 20, kernel_size=21, padding='same')
         self.rnn_encoder = nn.GRU(input_size=20, hidden_size=20, bidirectional=True, batch_first=True)
 
-        self.mlp_embed_encoder = StandardMLP(input_dim=data_dim, layer_sizes=(256,), output_dim=256)
-        self.encoder_positional_encoding = nn.Parameter(torch.randn(1, seq_len, 256))
-        self.decoder_positional_encoding = nn.Parameter(torch.randn(1, seq_len, latent_dim))
-        self.transformer_encoder = nn.TransformerEncoderLayer(256, 4, 512, batch_first=True)
-        self.delta_t_mlp = StandardMLP(input_dim=256, layer_sizes=(256,), output_dim=2)
-        self.mlp_latent_encoder = StandardMLP(input_dim=256, layer_sizes=(256,), output_dim=latent_dim)
-        self.mlp_decoder = StandardMLP(input_dim=latent_dim, layer_sizes=(256,), output_dim=data_dim)
+        self.mlp_embed_encoder = StandardMLP(input_dim=data_dim, layer_sizes=(256,), output_dim=128)
+        self.positional_encoding = nn.Parameter(torch.randn(1, seq_len, positional_encoding_dim))
+        self.transformer_encoder = nn.TransformerEncoderLayer(128 + positional_encoding_dim, 4, 512, batch_first=True)
+        self.delta_t_mlp = StandardMLP(input_dim=128 + positional_encoding_dim, layer_sizes=(256,), output_dim=2)
+        self.mlp_latent_encoder = StandardMLP(input_dim=128 + positional_encoding_dim, layer_sizes=(256,), output_dim=latent_dim)
+        self.mlp_decoder = StandardMLP(input_dim=latent_dim + positional_encoding_dim + max_subseq_len, layer_sizes=(256,), output_dim=data_dim)
 
         self.set_temperature(init_temperature)
         if init_hard:
@@ -36,6 +36,7 @@ class PrototypeModel(nn.Module):
         else:
             self.soft_sample()
         self.latent_dim = latent_dim
+        self.positional_encoding_dim = positional_encoding_dim
         self.seq_len = seq_len
         self.max_subseq_len = max_subseq_len
         self.half_context_len = self.max_subseq_len // 2
@@ -49,7 +50,7 @@ class PrototypeModel(nn.Module):
         assert traj.shape[1] == self.seq_len, "Trajectories must be of length {}".format(self.seq_len)
         batch_size = traj.shape[0]
         encoded_feats = self.mlp_embed_encoder(traj)
-        encoded_feats = encoded_feats + self.encoder_positional_encoding
+        encoded_feats = torch.cat([encoded_feats, self.positional_encoding.expand(batch_size, self.seq_len, self.positional_encoding_dim)], dim=-1)
         delta_t_logits = self.delta_t_mlp(self.transformer_encoder(encoded_feats))[:, :-1, :]
         delta_t = nn.functional.gumbel_softmax(delta_t_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
         if delta_t.requires_grad:
@@ -62,7 +63,7 @@ class PrototypeModel(nn.Module):
         unfolded_feats = unfolded_feats.reshape(batch_size, self.latent_dim, self.max_subseq_len, self.seq_len).permute(0, 3, 2, 1)
         attended_feats = torch.sum(unfolded_feats * temporal_attention_weights.unsqueeze(-1), dim=2)
 
-        reconstructed_traj = self.mlp_decoder(attended_feats + self.decoder_positional_encoding)
+        reconstructed_traj = self.mlp_decoder(torch.cat([attended_feats, self.positional_encoding.expand(batch_size, self.seq_len, self.positional_encoding_dim), temporal_attention_weights], dim=-1))
         info = dict(
             delta_t_logits=delta_t_logits,
             delta_t=delta_t,
