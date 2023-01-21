@@ -130,7 +130,7 @@ if __name__ == '__main__':
         log_every=50,
         viz_every=100,
         np_seed=0,
-        epochs=500,
+        epochs=1500,
         grad_clip=50.0,
         model=dict(
             latent_dim=4,
@@ -144,7 +144,7 @@ if __name__ == '__main__':
         ),
         temp_scheduler=dict(
             start_value=5.0,
-            end_value=0.25,
+            end_value=0.5,
             start_step=250,
             end_step=500,
         ),
