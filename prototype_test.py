@@ -135,6 +135,7 @@ if __name__ == '__main__':
         model=dict(
             latent_dim=4,
             positional_encoding_dim=64,
+            transformer_encoder_layers=2,
             max_subseq_len=257,
             reconstruction_loss_weight=1.0,
             time_gradient_scalar=1.0,
@@ -144,14 +145,14 @@ if __name__ == '__main__':
             weight_decay=1e-5,
         ),
         temp_scheduler=dict(
-            start_value=5.0,
+            start_value=2.0,
             end_value=0.5,
             start_step=150,
             end_step=400,
         ),
         time_loss_weight_scheduler=dict(
             start_value=0.0,
-            end_value=0.10,
+            end_value=0.20,
             start_step=10,
             end_step=10,
         ),

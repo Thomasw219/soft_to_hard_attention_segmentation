@@ -10,6 +10,7 @@ class PrototypeModel(nn.Module):
         seq_len=128,
         latent_dim=4,
         positional_encoding_dim=128,
+        transformer_encoder_layers=2,
         max_subseq_len=51,
         init_temperature=1.0,
         init_hard=False,
@@ -25,7 +26,7 @@ class PrototypeModel(nn.Module):
 
         self.mlp_embed_encoder = StandardMLP(input_dim=data_dim, layer_sizes=(256,), output_dim=128)
         self.positional_encoding = nn.Parameter(torch.randn(1, seq_len, positional_encoding_dim))
-        self.transformer_encoder = nn.TransformerEncoderLayer(128 + positional_encoding_dim, 4, 512, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(128 + positional_encoding_dim, 4, 512, batch_first=True), transformer_encoder_layers)
         self.delta_t_mlp = StandardMLP(input_dim=128 + positional_encoding_dim, layer_sizes=(256,), output_dim=2)
         self.mlp_latent_encoder = StandardMLP(input_dim=128 + positional_encoding_dim, layer_sizes=(256,), output_dim=latent_dim)
         self.mlp_decoder = StandardMLP(input_dim=latent_dim + positional_encoding_dim + max_subseq_len, layer_sizes=(256,), output_dim=data_dim)
