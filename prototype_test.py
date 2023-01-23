@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from data import ComplicatedSinusoid
 from models import PrototypeModel
-from utils import LinearScheduler, LogarithmicScheduler
+from utils import make_scheduler
 
 def test_prototype(cfg):
     np.random.seed(cfg['np_seed'])
@@ -23,8 +23,8 @@ def test_prototype(cfg):
     model = PrototypeModel(data_dim=1, seq_len=cfg['train_dataset']['signal_length'], **cfg['model'])
     model.to(cfg['device'])
     optimizer = torch.optim.Adam(model.parameters(), **cfg['optimizer'])
-    temp_scheduler = LogarithmicScheduler(**cfg['temp_scheduler'])
-    time_loss_weight_scheduler = LinearScheduler(**cfg['time_loss_weight_scheduler'])
+    temp_scheduler = make_scheduler(cfg['temp_scheduler'])
+    time_loss_weight_scheduler = make_scheduler(cfg['time_loss_weight_scheduler'])
 
     timestring = datetime.now(tz=timezone(timedelta(hours=-5))).strftime("_%m-%d-%Y_%H-%M-%S") # EST, No daylight savings
     logger = SummaryWriter(os.path.join(cfg['log_dir'], cfg['name'] + timestring))
@@ -145,12 +145,14 @@ if __name__ == '__main__':
             weight_decay=1e-5,
         ),
         temp_scheduler=dict(
+            type='logarithmic',
             start_value=2.0,
             end_value=0.5,
             start_step=150,
             end_step=400,
         ),
         time_loss_weight_scheduler=dict(
+            type='linear',
             start_value=0.0,
             end_value=0.20,
             start_step=10,
