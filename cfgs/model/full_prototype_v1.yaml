@@ -1,0 +1,32 @@
+reconstruction_loss_weight: 1.0
+abstract_transition_kl_weight: 1.0
+state_transition_kl_weight: 1.0
+time_loss_weight: 0.0 # Handled by scheduler
+init_temperature: 0.0 # Handled by scheduler
+
+state_rep_stoch_dim: 2
+state_rep_deter_dim: 2
+encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
+state_rep_post_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
+
+positional_encoding_dim: 64
+
+dt_transformer_rep_dim: 64
+dt_transformer_encoder_params: {num_layers: 2}
+dt_transformer_encoder_layer_params: {nhead: 4, dim_feedforward: 256, batch_first: True}
+dt_mlp_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
+
+abstract_representation_post_params: {layer_sizes: [256, 256], activate_last: False, activation: 'elu'}
+abstract_representation_stoch_dim: 4
+abstract_representation_deter_dim: 64
+
+abstract_representation_transformer_params: {num_layers: 2}
+abstract_representation_transformer_encoder_layer_params: {nhead: 4, dim_feedforward: 256, batch_first: True}
+
+abstract_representation_prior_params: {layer_sizes: [256, 256], activate_last: False, activation: 'elu'}
+
+transformer_decoder_params: {num_layers: 2}
+transformer_decoder_layer_params: {nhead: 4, dim_feedforward: 256, batch_first: True}
+
+state_representation_prior_params: {layer_sizes: [256, 256], activate_last: False, activation: 'elu'}
+decoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}

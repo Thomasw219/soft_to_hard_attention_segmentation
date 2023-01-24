@@ -139,6 +139,41 @@ class PrototypeModel(nn.Module):
         attention_weights = attention_weights / torch.sum(attention_weights, dim=-1, keepdim=True)
         return attention_weights
 
+class FullPrototypeModel(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+
+    def get_temporal_attention_weights(self, delta_t):
+        device = delta_t.device
+        batch_size = delta_t.shape[0]
+        seq_len = delta_t.shape[1] + 1
+        assert seq_len == self.cfg.seq_len
+        padding = torch.ones(batch_size, seq_len, device=device)
+        delta_t = torch.cat([padding, delta_t, padding], dim=1)
+        print(delta_t)
+        attention_weights = deque([torch.ones(batch_size, seq_len, device=device)])
+
+        forward_elapsed_t = torch.zeros(batch_size, seq_len, device=device)
+        backward_elapsed_t = torch.zeros(batch_size, seq_len, device=device)
+
+        base_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len) + seq_len
+        for i in range(seq_len):
+            forward_indices = base_indices + i
+            backward_indices = base_indices - i - 1
+
+            forward_elapsed_t = forward_elapsed_t + torch.gather(delta_t, 1, forward_indices)
+            backward_elapsed_t = backward_elapsed_t + torch.gather(delta_t, 1, backward_indices)
+
+            attention_weights.append(torch.maximum(1 - forward_elapsed_t, torch.zeros_like(forward_elapsed_t)))
+            attention_weights.appendleft(torch.maximum(1 - backward_elapsed_t, torch.zeros_like(backward_elapsed_t)))
+
+        attention_weights = torch.stack(list(attention_weights), dim=-1)
+        attention_weights = attention_weights / torch.sum(attention_weights, dim=-1, keepdim=True)
+        attention_weights = torch.gather(attention_weights, 1, base_indices.unsqueeze(-1).expand(batch_size, seq_len, seq_len))
+        print(attention_weights)
+        return attention_weights
+
 def test_temporal_attention():
     l = 10
     model = PrototypeModel(seq_len=10, max_subseq_len=5)
