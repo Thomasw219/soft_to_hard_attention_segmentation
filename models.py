@@ -140,15 +140,48 @@ class PrototypeModel(nn.Module):
         return attention_weights
 
 class FullPrototypeModel(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, data_dim, max_seq_len):
         super().__init__()
         self.cfg = cfg
+        self.data_dim = data_dim
+        self.max_seq_len = max_seq_len
+
+        self.temperature = cfg.init_temperature
+        self.time_loss_weight = cfg.time_loss_weight
+
+        self.encoder = StandardMLP(input_dim=data_dim, **cfg.encoder_params, output_dim=cfg.encoding_dim)
+
+        self.positional_encoding = nn.Parameter(torch.randn(1, cfg.max_subseq_len, cfg.positional_encoding_dim))
+
+        self.dt_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim, **cfg.dt_mlp_encoder_params, output_dim=cfg.dt_transformer_dim)
+        dt_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.dt_transformer_dim, **cfg.dt_transformer_encoder_layer_params)
+        self.dt_transformer_encoder = nn.TransformerEncoder(dt_transformer_encoder_layer, **cfg.dt_transformer_encoder_params)
+        self.dt_mlp_decoder = StandardMLP(input_dim=cfg.dt_transformer_dim, **cfg.dt_mlp_decoder_params, output_dim=1)
+
+        self.abstract_rep_post = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim)
+        self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
+        abstract_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
+        self.abstract_rep_transformer_encoder = nn.TransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_encoder_params)
+        self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
+        self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim)
+        self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
+
+        self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + cfg.state_rep_transformer_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim)
+        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        state_rep_transformer_decoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params)
+        self.state_rep_transformer_decoder = nn.TransformerDecoder(state_rep_transformer_decoder_layer, **cfg.state_rep_transformer_decoder_params)
+        self.state_rep_mlp_decoder = StandardMLP(input_dim=cfg.state_rep_transformer_dim, **cfg.state_rep_mlp_decoder_params, output_dim=cfg.state_rep_deter_dim)
+        self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim)
+        self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
+
+        self.decoder = StandardMLP(input_dim=self.state_rep_dim, **cfg.decoder_params, output_dim=data_dim)
 
     def get_temporal_attention_weights(self, delta_t):
         device = delta_t.device
         batch_size = delta_t.shape[0]
         seq_len = delta_t.shape[1] + 1
-        assert seq_len == self.cfg.seq_len
+        assert seq_len <= self.max_seq_len
         padding = torch.ones(batch_size, seq_len, device=device)
         delta_t = torch.cat([padding, delta_t, padding], dim=1)
         print(delta_t)
