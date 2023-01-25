@@ -153,10 +153,10 @@ class FullPrototypeModel(nn.Module):
 
         self.positional_encoding = nn.Parameter(torch.randn(1, cfg.max_subseq_len, cfg.positional_encoding_dim))
 
-        self.dt_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim, **cfg.dt_mlp_encoder_params, output_dim=cfg.dt_transformer_dim)
-        dt_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.dt_transformer_dim, **cfg.dt_transformer_encoder_layer_params)
-        self.dt_transformer_encoder = nn.TransformerEncoder(dt_transformer_encoder_layer, **cfg.dt_transformer_encoder_params)
-        self.dt_mlp_decoder = StandardMLP(input_dim=cfg.dt_transformer_dim, **cfg.dt_mlp_decoder_params, output_dim=1)
+        self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
+        segmentation_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params)
+        self.segmentation_transformer_encoder = nn.TransformerEncoder(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
+        self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=2)
 
         self.abstract_rep_post = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
         self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
@@ -174,6 +174,8 @@ class FullPrototypeModel(nn.Module):
         self.state_rep_mlp_decoder = StandardMLP(input_dim=cfg.state_rep_transformer_dim, **cfg.state_rep_mlp_decoder_params, output_dim=cfg.state_rep_deter_dim)
         self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim + self.abstract_rep_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
+
+        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.segmentation_prior_params, output_dim=2)
 
         self.decoder = StandardMLP(input_dim=self.state_rep_dim, **cfg.decoder_params, output_dim=data_dim)
 
