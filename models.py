@@ -145,6 +145,7 @@ class FullPrototypeModel(nn.Module):
         self.cfg = cfg
         self.data_dim = data_dim
         self.max_seq_len = max_seq_len
+        self.sample = False
 
         self.temperature = cfg.init_temperature
         self.time_loss_weight = cfg.time_loss_weight
@@ -173,7 +174,7 @@ class FullPrototypeModel(nn.Module):
         self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
 
         self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + self.abstract_rep_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim * 2)
-        self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
         self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
         state_rep_transformer_decoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_decoder_layer_params)
         self.state_rep_transformer_decoder = nn.TransformerDecoder(state_rep_transformer_decoder_layer, **cfg.state_rep_transformer_params)
@@ -191,7 +192,7 @@ class FullPrototypeModel(nn.Module):
         assert traj.shape[1] <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         batch_size = traj.shape[0]
         encodings = self.encoder(traj)
-        broadcast_positional_encoding = self.positional_encoding[:traj.shape[1]].unsqueeze(0).expand(batch_size, -1, -1)
+        broadcast_positional_encoding = self.positional_encoding[:traj.shape[1]].expand(batch_size, -1, -1)
 
         segmentation_encodings = self.segmentation_mlp_encoder(encodings)
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
@@ -199,6 +200,7 @@ class FullPrototypeModel(nn.Module):
         segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
         segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
         segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
+        exit()
 
         compression_encodings = self.compression_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_compression_encodings = self.compression_transformer_encoder(compression_encodings, mask=segmentation_attention_mask)
@@ -217,7 +219,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds)
 
-        state_rep_encoded_context = self.state_rep_context_encoder(abstract_rep)
+        state_rep_encoded_context = self.state_rep_context_encoder(torch.cat([abstract_rep, broadcast_positional_encoding], dim=-1))
         state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples)
         # Check shape of context here
         transformed_state_rep_encodings = self.state_rep_transformer_decoder(state_rep_encodings, state_rep_encoded_context, mask=causal_segmentation_attention_mask)
@@ -272,14 +274,46 @@ class FullPrototypeModel(nn.Module):
             attention_weights.appendleft(torch.maximum(1 - backward_elapsed_t, torch.zeros_like(backward_elapsed_t)))
 
         attention_weights = torch.stack(list(attention_weights), dim=-1)
-        attention_weights = attention_weights / torch.sum(attention_weights, dim=-1, keepdim=True)
-        attention_weights = torch.gather(attention_weights, 1, base_indices.unsqueeze(-1).expand(batch_size, seq_len, seq_len))
-        print(attention_weights)
+        seq_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).unsqueeze(1) + (seq_len - torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)).unsqueeze(-1)
+        attention_weights = torch.gather(attention_weights, 2, seq_indices)
+        segmentation_attention_mask = attention_weights.unsqueeze(1).expand(batch_size, self.compression_transformer_nheads, seq_len, seq_len)
+        segmentation_attention_mask = segmentation_attention_mask.reshape(batch_size * self.compression_transformer_nheads, seq_len, seq_len)
 
-        causal_attention_weights = None # TODO implement causal attention weights
-        # TODO change to shape required by pytorch transformer stuff
+        all_indices = seq_indices - seq_len
+        causal_attention_weights = torch.where(torch.zeros(1, device=device) > all_indices, attention_weights, torch.zeros_like(attention_weights))
 
-        return attention_weights, causal_attention_weights, None
+        causal_segmentation_attention_mask = causal_attention_weights.unsqueeze(1).expand(batch_size, self.state_rep_transformer_nheads, seq_len, seq_len)
+        causal_segmentation_attention_mask = causal_segmentation_attention_mask.reshape(batch_size * self.state_rep_transformer_nheads, seq_len, seq_len)
+
+        abstract_causal_attention_weights = torch.where(torch.zeros(1, device=device) > all_indices, torch.ones_like(attention_weights) - attention_weights, torch.zeros_like(attention_weights))
+
+        abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
+        abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
+
+        return torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
+
+    def set_temperature(self, temperature):
+        self.temperature = temperature
+
+    def set_time_loss_weight(self, time_loss_weight):
+        self.time_loss_weight = time_loss_weight
+
+    def hard_sample(self):
+        self.sample = True
+
+    def soft_sample(self):
+        self.sample = False
+
+    def train(self, mode=True):
+        if mode:
+            self.soft_sample()
+        else:
+            self.hard_sample()
+        super().train(mode)
+
+    def eval(self):
+        self.hard_sample()
+        super().eval()
 
 def test_temporal_attention():
     l = 10
@@ -357,7 +391,7 @@ def test_full_prototype_forward():
         model = FullPrototypeModel(cfg, data_dim=data_dim, max_seq_len=seq_len)
 
         traj = torch.randn(batch_size, seq_len, data_dim)
-        # model.forward(traj)
+        model.forward(traj)
 
 if __name__ == '__main__':
     # test_temporal_attention()
