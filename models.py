@@ -158,8 +158,12 @@ class FullPrototypeModel(nn.Module):
         self.segmentation_transformer_encoder = nn.TransformerEncoder(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=2)
 
-        self.abstract_rep_post = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
-        self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
+        self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.compression_transformer_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
+        compression_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params)
+        self.compression_transformer_encoder = nn.TransformerEncoder(compression_transformer_encoder_layer, **cfg.compression_transformer_encoder_params)
+        self.abstract_rep_post = StandardMLP(input_dim=cfg.compression_transformer_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
+
+        self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
         abstract_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
         self.abstract_rep_transformer_encoder = nn.TransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_encoder_params)
         self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
@@ -168,7 +172,7 @@ class FullPrototypeModel(nn.Module):
 
         self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + self.abstract_rep_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
-        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
         state_rep_transformer_decoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params)
         self.state_rep_transformer_decoder = nn.TransformerDecoder(state_rep_transformer_decoder_layer, **cfg.state_rep_transformer_decoder_params)
         self.state_rep_mlp_decoder = StandardMLP(input_dim=cfg.state_rep_transformer_dim, **cfg.state_rep_mlp_decoder_params, output_dim=cfg.state_rep_deter_dim)
@@ -178,6 +182,11 @@ class FullPrototypeModel(nn.Module):
         self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.segmentation_prior_params, output_dim=2)
 
         self.decoder = StandardMLP(input_dim=self.state_rep_dim, **cfg.decoder_params, output_dim=data_dim)
+
+    def forward(self, traj):
+        # traj is a tensor of shape (batch_size, seq_len, data_dim)
+        assert traj.shape[1] <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
+        batch_size = traj.shape[0]
 
     def get_temporal_attention_weights(self, delta_t):
         device = delta_t.device
@@ -207,7 +216,10 @@ class FullPrototypeModel(nn.Module):
         attention_weights = attention_weights / torch.sum(attention_weights, dim=-1, keepdim=True)
         attention_weights = torch.gather(attention_weights, 1, base_indices.unsqueeze(-1).expand(batch_size, seq_len, seq_len))
         print(attention_weights)
-        return attention_weights
+
+        causal_attention_weights = None # TODO implement causal attention weights
+
+        return attention_weights, causal_attention_weights
 
 def test_temporal_attention():
     l = 10
