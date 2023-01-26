@@ -151,22 +151,22 @@ class FullPrototypeModel(nn.Module):
 
         self.encoder = StandardMLP(input_dim=data_dim, **cfg.encoder_params, output_dim=cfg.encoding_dim)
 
-        self.positional_encoding = nn.Parameter(torch.randn(1, cfg.max_subseq_len, cfg.positional_encoding_dim))
+        self.positional_encoding = nn.Parameter(torch.randn(1, max_seq_len, cfg.positional_encoding_dim))
 
         self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
         segmentation_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params)
         self.segmentation_transformer_encoder = nn.TransformerEncoder(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=2)
 
-        self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.compression_transformer_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
+        self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.compression_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
         compression_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params)
-        self.compression_transformer_encoder = nn.TransformerEncoder(compression_transformer_encoder_layer, **cfg.compression_transformer_encoder_params)
+        self.compression_transformer_encoder = nn.TransformerEncoder(compression_transformer_encoder_layer, **cfg.compression_transformer_params)
         self.compression_transformer_nheads = cfg.compression_transformer_encoder_layer_params['nhead']
         self.abstract_rep_post = StandardMLP(input_dim=cfg.compression_transformer_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
         self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
         abstract_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
-        self.abstract_rep_transformer_encoder = nn.TransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_encoder_params)
+        self.abstract_rep_transformer_encoder = nn.TransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_params)
         self.abstract_rep_transformer_nheads = cfg.abstract_rep_transformer_encoder_layer_params['nhead']
         self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
         self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
@@ -175,9 +175,9 @@ class FullPrototypeModel(nn.Module):
         self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + self.abstract_rep_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
         self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
-        state_rep_transformer_decoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params)
-        self.state_rep_transformer_decoder = nn.TransformerDecoder(state_rep_transformer_decoder_layer, **cfg.state_rep_transformer_decoder_params)
-        self.state_rep_transformer_nheads = cfg.state_rep_transformer_encoder_layer_params['nhead']
+        state_rep_transformer_decoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_decoder_layer_params)
+        self.state_rep_transformer_decoder = nn.TransformerDecoder(state_rep_transformer_decoder_layer, **cfg.state_rep_transformer_params)
+        self.state_rep_transformer_nheads = cfg.state_rep_transformer_decoder_layer_params['nhead']
         self.state_rep_mlp_decoder = StandardMLP(input_dim=cfg.state_rep_transformer_dim, **cfg.state_rep_mlp_decoder_params, output_dim=cfg.state_rep_deter_dim)
         self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim + self.abstract_rep_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
@@ -345,7 +345,22 @@ def multihead_attention_mask_shape_test():
     print(weights)
     print(weights.shape)
 
+def test_full_prototype_forward():
+    from hydra import initialize, compose
+
+    batch_size = 2
+    seq_len = 5
+    data_dim = 1
+
+    with initialize(version_base="1.3", config_path="cfgs/model/"):
+        cfg = compose(config_name="full_prototype_v1")
+        model = FullPrototypeModel(cfg, data_dim=data_dim, max_seq_len=seq_len)
+
+        traj = torch.randn(batch_size, seq_len, data_dim)
+        # model.forward(traj)
+
 if __name__ == '__main__':
     # test_temporal_attention()
     # multihead_attention_mask_shape_test()
+    test_full_prototype_forward()
     pass

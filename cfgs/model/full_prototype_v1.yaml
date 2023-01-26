@@ -18,7 +18,7 @@ segmentation_post_params: {layer_sizes: [256], activate_last: False, activation:
 abstract_rep_stoch_dim: 4
 abstract_rep_deter_dim: 16
 compression_transformer_dim: 64
-compression_mlp_encoder: {layer_sizes: [256], activate_last: False, activation: 'elu'}
+compression_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 compression_transformer_encoder_layer_params: {nhead: 4, dim_feedforward: 256, batch_first: True}
 compression_transformer_params: {num_layers: 2}
 abstract_rep_post_params: {layer_sizes: [256, 256], activate_last: False, activation: 'elu'}
