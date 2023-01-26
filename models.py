@@ -161,11 +161,13 @@ class FullPrototypeModel(nn.Module):
         self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.compression_transformer_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
         compression_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params)
         self.compression_transformer_encoder = nn.TransformerEncoder(compression_transformer_encoder_layer, **cfg.compression_transformer_encoder_params)
+        self.compression_transformer_nheads = cfg.compression_transformer_encoder_layer_params['nhead']
         self.abstract_rep_post = StandardMLP(input_dim=cfg.compression_transformer_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
         self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
         abstract_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
         self.abstract_rep_transformer_encoder = nn.TransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_encoder_params)
+        self.abstract_rep_transformer_nheads = cfg.abstract_rep_transformer_encoder_layer_params['nhead']
         self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
         self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
         self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
@@ -175,6 +177,7 @@ class FullPrototypeModel(nn.Module):
         self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
         state_rep_transformer_decoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params)
         self.state_rep_transformer_decoder = nn.TransformerDecoder(state_rep_transformer_decoder_layer, **cfg.state_rep_transformer_decoder_params)
+        self.state_rep_transformer_nheads = cfg.state_rep_transformer_encoder_layer_params['nhead']
         self.state_rep_mlp_decoder = StandardMLP(input_dim=cfg.state_rep_transformer_dim, **cfg.state_rep_mlp_decoder_params, output_dim=cfg.state_rep_deter_dim)
         self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim + self.abstract_rep_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
@@ -187,11 +190,67 @@ class FullPrototypeModel(nn.Module):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
         assert traj.shape[1] <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         batch_size = traj.shape[0]
+        encodings = self.encoder(traj)
+        broadcast_positional_encoding = self.positional_encoding[:traj.shape[1]].unsqueeze(0).expand(batch_size, -1, -1)
 
-    def get_temporal_attention_weights(self, delta_t):
+        segmentation_encodings = self.segmentation_mlp_encoder(encodings)
+        transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
+        segmentation_logits = self.segmentation_post(transformed_segmentation_encodings)[:, 1:, :]
+        segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
+        segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
+        segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
+
+        compression_encodings = self.compression_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
+        transformed_compression_encodings = self.compression_transformer_encoder(compression_encodings, mask=segmentation_attention_mask)
+        abstract_rep_post_params = self.abstract_rep_post(transformed_compression_encodings)
+        abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
+        abstract_rep_stoch_samples = self.reparameterize(abstract_rep_post_means, abstract_rep_post_stds)
+
+        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples)
+        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+        abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
+        abstract_rep_prior_params = self.abstract_rep_prior(abstract_rep_deter)
+        abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
+        abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
+
+        state_rep_post_params = self.state_rep_post(torch.cat([encodings, abstract_rep], dim=-1))
+        state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
+        state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds)
+
+        state_rep_encoded_context = self.state_rep_context_encoder(abstract_rep)
+        state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples)
+        # Check shape of context here
+        transformed_state_rep_encodings = self.state_rep_transformer_decoder(state_rep_encodings, state_rep_encoded_context, mask=causal_segmentation_attention_mask)
+        state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
+        state_rep_prior_params = self.state_rep_prior(state_rep_deter)
+        state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
+        state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
+
+        reconstructed_traj = self.decoder(state_rep)
+
+        return reconstructed_traj, dict(
+            segmentation_logits=segmentation_logits,
+            segmentation_samples=segmentation_samples,
+            abstract_rep_post_means=abstract_rep_post_means,
+            abstract_rep_post_stds=abstract_rep_post_stds,
+            abstract_rep_prior_means=abstract_rep_prior_means,
+            abstract_rep_prior_stds=abstract_rep_prior_stds,
+            abstract_rep=abstract_rep,
+            state_rep_post_means=state_rep_post_means,
+            state_rep_post_stds=state_rep_post_stds,
+            state_rep_prior_means=state_rep_prior_means,
+            state_rep_prior_stds=state_rep_prior_stds,
+            state_rep=state_rep,
+        )
+
+    def reparameterize(self, means, stds):
+        eps = torch.randn_like(stds)
+        return means + eps * stds
+
+    def get_segmentation_attention_masks(self, delta_t):
         device = delta_t.device
         batch_size = delta_t.shape[0]
-        seq_len = delta_t.shape[1] + 1
+        seq_len = delta_t.shape[1]
         assert seq_len <= self.max_seq_len
         padding = torch.ones(batch_size, seq_len, device=device)
         delta_t = torch.cat([padding, delta_t, padding], dim=1)
@@ -203,8 +262,8 @@ class FullPrototypeModel(nn.Module):
 
         base_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len) + seq_len
         for i in range(seq_len):
-            forward_indices = base_indices + i
-            backward_indices = base_indices - i - 1
+            forward_indices = base_indices + i + 1
+            backward_indices = base_indices - i
 
             forward_elapsed_t = forward_elapsed_t + torch.gather(delta_t, 1, forward_indices)
             backward_elapsed_t = backward_elapsed_t + torch.gather(delta_t, 1, backward_indices)
@@ -218,8 +277,9 @@ class FullPrototypeModel(nn.Module):
         print(attention_weights)
 
         causal_attention_weights = None # TODO implement causal attention weights
+        # TODO change to shape required by pytorch transformer stuff
 
-        return attention_weights, causal_attention_weights
+        return attention_weights, causal_attention_weights, None
 
 def test_temporal_attention():
     l = 10
@@ -263,5 +323,29 @@ class StandardMLP(nn.Module):
     def forward(self, x):
         return self.network.forward(x)
 
+def multihead_attention_mask_shape_test():
+    batch_size = 3
+    embedding_dim = 4
+    num_heads = 2
+    sequence_len = 5
+    mha = nn.MultiheadAttention(embedding_dim, num_heads, batch_first=True)
+    q = torch.randn(batch_size, sequence_len, embedding_dim)
+    k = torch.randn(batch_size, sequence_len, embedding_dim)
+    v = torch.randn(batch_size, sequence_len, embedding_dim)
+    mask = torch.where(torch.rand(batch_size, sequence_len, sequence_len) > 0.5, -torch.inf * torch.ones(1), torch.zeros(1))
+    mask = mask.unsqueeze(1).repeat(1, num_heads, 1, 1).reshape(batch_size * num_heads, sequence_len, sequence_len)
+    print("Mask: ")
+    print(mask)
+    print(mask.shape)
+    print("Reshaped mask: ")
+    print(mask.reshape(batch_size, num_heads, sequence_len, sequence_len))
+    print(mask.reshape(batch_size, num_heads, sequence_len, sequence_len).shape)
+    _, weights = mha(q, k, v, attn_mask=mask)
+    print("Weights: ")
+    print(weights)
+    print(weights.shape)
+
 if __name__ == '__main__':
-    test_temporal_attention()
+    # test_temporal_attention()
+    # multihead_attention_mask_shape_test()
+    pass
