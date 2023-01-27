@@ -175,10 +175,10 @@ class FullPrototypeModel(nn.Module):
 
         self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + self.abstract_rep_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
-        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
-        state_rep_transformer_decoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_decoder_layer_params)
-        self.state_rep_transformer_decoder = nn.TransformerDecoder(state_rep_transformer_decoder_layer, **cfg.state_rep_transformer_params)
-        self.state_rep_transformer_nheads = cfg.state_rep_transformer_decoder_layer_params['nhead']
+        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim  + self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        state_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params)
+        self.state_rep_transformer_encoder = nn.TransformerEncoder(state_rep_transformer_encoder_layer, **cfg.state_rep_transformer_params)
+        self.state_rep_transformer_nheads = cfg.state_rep_transformer_encoder_layer_params['nhead']
         self.state_rep_mlp_decoder = StandardMLP(input_dim=cfg.state_rep_transformer_dim, **cfg.state_rep_mlp_decoder_params, output_dim=cfg.state_rep_deter_dim)
         self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim + self.abstract_rep_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
@@ -200,7 +200,6 @@ class FullPrototypeModel(nn.Module):
         segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
         segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
         segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
-        exit()
 
         compression_encodings = self.compression_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_compression_encodings = self.compression_transformer_encoder(compression_encodings, mask=segmentation_attention_mask)
@@ -208,7 +207,7 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize(abstract_rep_post_means, abstract_rep_post_stds)
 
-        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples)
+        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples.unsqueeze(-1))
         transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
         abstract_rep_prior_params = self.abstract_rep_prior(abstract_rep_deter)
@@ -219,12 +218,10 @@ class FullPrototypeModel(nn.Module):
         state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds)
 
-        state_rep_encoded_context = self.state_rep_context_encoder(torch.cat([abstract_rep, broadcast_positional_encoding], dim=-1))
-        state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples)
-        # Check shape of context here
-        transformed_state_rep_encodings = self.state_rep_transformer_decoder(state_rep_encodings, state_rep_encoded_context, mask=causal_segmentation_attention_mask)
+        state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
+        transformed_state_rep_encodings = self.state_rep_transformer_encoder(state_rep_encodings, mask=causal_segmentation_attention_mask)
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
-        state_rep_prior_params = self.state_rep_prior(state_rep_deter)
+        state_rep_prior_params = self.state_rep_prior(torch.cat([state_rep_deter, abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
@@ -256,7 +253,6 @@ class FullPrototypeModel(nn.Module):
         assert seq_len <= self.max_seq_len
         padding = torch.ones(batch_size, seq_len, device=device)
         delta_t = torch.cat([padding, delta_t, padding], dim=1)
-        print(delta_t)
         attention_weights = deque([torch.ones(batch_size, seq_len, device=device)])
 
         forward_elapsed_t = torch.zeros(batch_size, seq_len, device=device)
