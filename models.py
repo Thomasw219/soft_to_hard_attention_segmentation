@@ -246,24 +246,24 @@ class FullPrototypeModel(nn.Module):
     def get_loss(self, traj):
         reconstructed_traj, info = self.forward(traj)
         reconstruction_loss = nn.functional.mse_loss(traj, reconstructed_traj)
-        segmentation_samples = info['segmentation_samples'].unsqueeze(-1)
+        segmentation_samples = info['segmentation_samples']
         time_loss = torch.mean(segmentation_samples[:, 1:])
 
         abstract_rep_post_means, abstract_rep_post_stds = info['abstract_rep_post_means'], info['abstract_rep_post_stds']
-        abstract_rep_post_dist = torch.distributions.Normal(abstract_rep_post_means, abstract_rep_post_stds)
+        abstract_rep_post_dist = torch.distributions.Independent(torch.distributions.Normal(abstract_rep_post_means, abstract_rep_post_stds), 1)
         abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
-        abstract_rep_prior_dist = torch.distributions.Normal(abstract_rep_prior_means, abstract_rep_prior_stds)
+        abstract_rep_prior_dist = torch.distributions.Independent(torch.distributions.Normal(abstract_rep_prior_means, abstract_rep_prior_stds), 1)
 
         # TODO: KL Balancing, don't regularize posterior to bad prior
-        abstract_rep_kl_loss = torch.sum(torch.distributions.kl_divergence(abstract_rep_post_dist, abstract_rep_prior_dist) * segmentation_samples)
+        abstract_rep_kl_loss = torch.mean(torch.sum(torch.distributions.kl_divergence(abstract_rep_post_dist, abstract_rep_prior_dist) * segmentation_samples, dim=-1))
 
         state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
-        state_rep_post_dist = torch.distributions.Normal(state_rep_post_means, state_rep_post_stds)
+        state_rep_post_dist = torch.distributions.Independent(torch.distributions.Normal(state_rep_post_means, state_rep_post_stds), 1)
         state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
-        state_rep_prior_dist = torch.distributions.Normal(state_rep_prior_means, state_rep_prior_stds)
+        state_rep_prior_dist = torch.distributions.Independent(torch.distributions.Normal(state_rep_prior_means, state_rep_prior_stds), 1)
 
         # TODO: KL Balancing, don't regularize posterior to bad prior
-        state_rep_kl_loss = torch.sum(torch.distributions.kl_divergence(state_rep_post_dist, state_rep_prior_dist) * segmentation_samples)
+        state_rep_kl_loss = torch.mean(torch.sum(torch.distributions.kl_divergence(state_rep_post_dist, state_rep_prior_dist) * segmentation_samples, dim=-1))
 
         model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
             self.cfg.time_loss_weight * time_loss + \
