@@ -1,5 +1,6 @@
 from collections import deque
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -202,13 +203,13 @@ class FullPrototypeModel(nn.Module):
         segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
 
         compression_encodings = self.compression_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
-        transformed_compression_encodings = self.compression_transformer_encoder(compression_encodings, mask=segmentation_attention_mask)
+        transformed_compression_encodings = prepend_null_token_transformer_encoder_pass(compression_encodings, segmentation_attention_mask, self.compression_transformer_encoder, nheads=self.compression_transformer_nheads)
         abstract_rep_post_params = self.abstract_rep_post(transformed_compression_encodings)
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize(abstract_rep_post_means, abstract_rep_post_stds)
 
         abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples.unsqueeze(-1))
-        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+        transformed_abstract_rep_encodings = prepend_null_token_transformer_encoder_pass(abstract_rep_encodings, abstract_causal_segmentation_attention_mask, self.abstract_rep_transformer_encoder, nheads=self.abstract_rep_transformer_nheads)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
         abstract_rep_prior_params = self.abstract_rep_prior(abstract_rep_deter)
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
@@ -219,7 +220,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds)
 
         state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
-        transformed_state_rep_encodings = self.state_rep_transformer_encoder(state_rep_encodings, mask=causal_segmentation_attention_mask)
+        transformed_state_rep_encodings = prepend_null_token_transformer_encoder_pass(state_rep_encodings, causal_segmentation_attention_mask, self.state_rep_transformer_encoder, nheads=self.state_rep_transformer_nheads)
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
         state_rep_prior_params = self.state_rep_prior(torch.cat([state_rep_deter, abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
@@ -241,6 +242,43 @@ class FullPrototypeModel(nn.Module):
             state_rep_prior_stds=state_rep_prior_stds,
             state_rep=state_rep,
         )
+
+    def get_loss(self, traj):
+        reconstructed_traj, info = self.forward(traj)
+        reconstruction_loss = nn.functional.mse_loss(traj, reconstructed_traj)
+        segmentation_samples = info['segmentation_samples'].unsqueeze(-1)
+        time_loss = torch.mean(segmentation_samples[:, 1:])
+
+        abstract_rep_post_means, abstract_rep_post_stds = info['abstract_rep_post_means'], info['abstract_rep_post_stds']
+        abstract_rep_post_dist = torch.distributions.Normal(abstract_rep_post_means, abstract_rep_post_stds)
+        abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
+        abstract_rep_prior_dist = torch.distributions.Normal(abstract_rep_prior_means, abstract_rep_prior_stds)
+
+        # TODO: KL Balancing, don't regularize posterior to bad prior
+        abstract_rep_kl_loss = torch.sum(torch.distributions.kl_divergence(abstract_rep_post_dist, abstract_rep_prior_dist) * segmentation_samples)
+
+        state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
+        state_rep_post_dist = torch.distributions.Normal(state_rep_post_means, state_rep_post_stds)
+        state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
+        state_rep_prior_dist = torch.distributions.Normal(state_rep_prior_means, state_rep_prior_stds)
+
+        # TODO: KL Balancing, don't regularize posterior to bad prior
+        state_rep_kl_loss = torch.sum(torch.distributions.kl_divergence(state_rep_post_dist, state_rep_prior_dist) * segmentation_samples)
+
+        model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
+            self.cfg.time_loss_weight * time_loss + \
+            self.cfg.abstract_transition_kl_weight * abstract_rep_kl_loss + \
+            self.cfg.state_transition_kl_weight * state_rep_kl_loss
+
+        metrics = dict(
+            loss=model_loss.item(),
+            reconstruction_loss=reconstruction_loss.item(),
+            time_loss=time_loss.item(),
+            abstract_transition_kl_loss=abstract_rep_kl_loss.item(),
+            state_transition_kl_loss=state_rep_kl_loss.item(),
+        )
+
+        return model_loss, metrics, info
 
     def reparameterize(self, means, stds):
         eps = torch.randn_like(stds)
@@ -311,12 +349,6 @@ class FullPrototypeModel(nn.Module):
         self.hard_sample()
         super().eval()
 
-def test_temporal_attention():
-    l = 10
-    model = PrototypeModel(seq_len=10, max_subseq_len=5)
-    trajs = torch.randn(2, l, 1)
-    model.get_loss(trajs)
-
 def get_activation(activation):
     if activation == 'elu':
         return nn.ELU
@@ -353,6 +385,26 @@ class StandardMLP(nn.Module):
     def forward(self, x):
         return self.network.forward(x)
 
+def prepend_null_token_transformer_encoder_pass(transformer_input, transformer_mask, transformer, nheads, null_token=None, null_mask_value=0):
+    # Expecting batch first input, so (batch_size, seq_len, input_dim)
+    batch_size, seq_len, _ = transformer_input.shape
+    device = transformer_input.device
+    if null_token is None:
+        null_token = torch.zeros_like(transformer_input[:, :1, :])
+    null_vector_to_others_mask = torch.zeros(batch_size * nheads, 1, seq_len, device=device)
+    all_vectors_to_null_mask = torch.ones(batch_size * nheads, seq_len + 1, 1, device=device) * null_mask_value
+
+    transformer_input = torch.cat([null_token, transformer_input], dim=1)
+    transformer_mask = torch.cat([torch.cat([null_vector_to_others_mask, transformer_mask], dim=1), all_vectors_to_null_mask], dim=2)
+    transformer_output = transformer(transformer_input, transformer_mask)
+    return transformer_output[:, 1:, :]
+
+def test_temporal_attention():
+    l = 10
+    model = PrototypeModel(seq_len=10, max_subseq_len=5)
+    trajs = torch.randn(2, l, 1)
+    model.get_loss(trajs)
+
 def multihead_attention_mask_shape_test():
     batch_size = 3
     embedding_dim = 4
@@ -387,7 +439,8 @@ def test_full_prototype_forward():
         model = FullPrototypeModel(cfg, data_dim=data_dim, max_seq_len=seq_len)
 
         traj = torch.randn(batch_size, seq_len, data_dim)
-        model.forward(traj)
+        _, metrics, _ = model.get_loss(traj)
+        print(metrics)
 
 if __name__ == '__main__':
     # test_temporal_attention()
