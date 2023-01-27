@@ -245,6 +245,8 @@ class FullPrototypeModel(nn.Module):
 
     def get_loss(self, traj):
         reconstructed_traj, info = self.forward(traj)
+        info['reconstructed_traj'] = reconstructed_traj
+        info['ground_truth_traj'] = traj
         reconstruction_loss = nn.functional.mse_loss(traj, reconstructed_traj)
         segmentation_samples = info['segmentation_samples']
         time_loss = torch.mean(segmentation_samples[:, 1:])
