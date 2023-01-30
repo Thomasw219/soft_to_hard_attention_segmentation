@@ -203,7 +203,7 @@ class FullPrototypeModel(nn.Module):
         segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
 
         compression_encodings = self.compression_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
-        transformed_compression_encodings = prepend_null_token_transformer_encoder_pass(compression_encodings, segmentation_attention_mask, self.compression_transformer_encoder, nheads=self.compression_transformer_nheads)
+        transformed_compression_encodings = self.compression_transformer_encoder(compression_encodings, mask=segmentation_attention_mask)
         abstract_rep_post_params = self.abstract_rep_post(transformed_compression_encodings)
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize(abstract_rep_post_means, abstract_rep_post_stds)
@@ -406,12 +406,12 @@ def prepend_null_token_transformer_encoder_pass(transformer_input, transformer_m
     device = transformer_input.device
     if null_token is None:
         null_token = torch.zeros_like(transformer_input[:, :1, :])
-    null_vector_to_others_mask = torch.zeros(batch_size * nheads, 1, seq_len, device=device)
+    null_vector_to_others_mask = -torch.inf * torch.ones(batch_size * nheads, 1, seq_len, device=device)
     all_vectors_to_null_mask = torch.ones(batch_size * nheads, seq_len + 1, 1, device=device) * null_mask_value
 
     transformer_input = torch.cat([null_token, transformer_input], dim=1)
-    transformer_mask = torch.cat([torch.cat([null_vector_to_others_mask, transformer_mask], dim=1), all_vectors_to_null_mask], dim=2)
-    transformer_output = transformer(transformer_input, transformer_mask)
+    transformer_mask = torch.cat([all_vectors_to_null_mask, torch.cat([null_vector_to_others_mask, transformer_mask], dim=1)], dim=2)
+    transformer_output = transformer(transformer_input, mask=transformer_mask)
     return transformer_output[:, 1:, :]
 
 def test_temporal_attention():
@@ -429,7 +429,8 @@ def multihead_attention_mask_shape_test():
     q = torch.randn(batch_size, sequence_len, embedding_dim)
     k = torch.randn(batch_size, sequence_len, embedding_dim)
     v = torch.randn(batch_size, sequence_len, embedding_dim)
-    mask = torch.where(torch.rand(batch_size, sequence_len, sequence_len) > 0.5, -torch.inf * torch.ones(1), torch.zeros(1))
+    # mask = torch.where(torch.rand(batch_size, sequence_len, sequence_len) > 0.5, -torch.inf * torch.ones(1), torch.zeros(1))
+    mask = torch.cat([torch.zeros(batch_size, sequence_len, 1), torch.cat([torch.ones(batch_size, 1, sequence_len - 1) * -torch.inf, torch.ones(batch_size, sequence_len - 1, sequence_len - 1) * -torch.inf], dim=-2)], dim=-1)
     mask = mask.unsqueeze(1).repeat(1, num_heads, 1, 1).reshape(batch_size * num_heads, sequence_len, sequence_len)
     print("Mask: ")
     print(mask)
@@ -437,10 +438,13 @@ def multihead_attention_mask_shape_test():
     print("Reshaped mask: ")
     print(mask.reshape(batch_size, num_heads, sequence_len, sequence_len))
     print(mask.reshape(batch_size, num_heads, sequence_len, sequence_len).shape)
-    _, weights = mha(q, k, v, attn_mask=mask)
+    output, weights = mha(q, k, v, attn_mask=mask)
     print("Weights: ")
     print(weights)
     print(weights.shape)
+    print("Output: ")
+    print(output)
+    print(output.shape)
 
 def test_full_prototype_forward():
     from hydra import initialize, compose
