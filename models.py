@@ -208,7 +208,7 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize(abstract_rep_post_means, abstract_rep_post_stds)
 
-        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1) * segmentation_samples.unsqueeze(-1))
+        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
         transformed_abstract_rep_encodings = prepend_null_token_transformer_encoder_pass(abstract_rep_encodings, abstract_causal_segmentation_attention_mask, self.abstract_rep_transformer_encoder, nheads=self.abstract_rep_transformer_nheads)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
         abstract_rep_prior_params = self.abstract_rep_prior(abstract_rep_deter)
@@ -252,20 +252,15 @@ class FullPrototypeModel(nn.Module):
         time_loss = torch.mean(segmentation_samples[:, 1:])
 
         abstract_rep_post_means, abstract_rep_post_stds = info['abstract_rep_post_means'], info['abstract_rep_post_stds']
-        abstract_rep_post_dist = torch.distributions.Independent(torch.distributions.Normal(abstract_rep_post_means, abstract_rep_post_stds), 1)
         abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
-        abstract_rep_prior_dist = torch.distributions.Independent(torch.distributions.Normal(abstract_rep_prior_means, abstract_rep_prior_stds), 1)
 
-        # TODO: KL Balancing, don't regularize posterior to bad prior
-        abstract_rep_kl_loss = torch.mean(torch.sum(torch.distributions.kl_divergence(abstract_rep_post_dist, abstract_rep_prior_dist) * segmentation_samples, dim=-1))
+        # TODO: Don't include time loss factor into KL loss, keep them factorized
+        abstract_rep_kl_loss = torch.mean(torch.sum(self.kl_balance(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance) * segmentation_samples, dim=-1))
 
         state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
-        state_rep_post_dist = torch.distributions.Independent(torch.distributions.Normal(state_rep_post_means, state_rep_post_stds), 1)
         state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
-        state_rep_prior_dist = torch.distributions.Independent(torch.distributions.Normal(state_rep_prior_means, state_rep_prior_stds), 1)
 
-        # TODO: KL Balancing, don't regularize posterior to bad prior
-        state_rep_kl_loss = torch.mean(torch.sum(torch.distributions.kl_divergence(state_rep_post_dist, state_rep_prior_dist), dim=-1))
+        state_rep_kl_loss = torch.mean(torch.sum(self.kl_balance(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance), dim=-1))
 
         # TODO: Termination prior KL
 
@@ -278,12 +273,21 @@ class FullPrototypeModel(nn.Module):
             loss=model_loss.item(),
             reconstruction_loss=reconstruction_loss.item(),
             time_loss=time_loss.item(),
-            average_compression=torch.minimum(1 / time_loss, torch.tensor(self.max_seq_len, device=time_loss.device)),
+            average_compression=torch.minimum(1 / time_loss, torch.tensor(self.max_seq_len, device=time_loss.device)).item(),
             abstract_transition_kl_loss=abstract_rep_kl_loss.item(),
             state_transition_kl_loss=state_rep_kl_loss.item(),
         )
 
         return model_loss, metrics, info
+
+    def get_dist(self, means, stds):
+        return torch.distributions.Independent(torch.distributions.Normal(means, stds), 1)
+
+    def kl_balance(self, prior_means, prior_stds, post_means, post_stds, kl_balance_ratio):
+        kl_prior = torch.distributions.kl_divergence(self.get_dist(post_means.detach(), post_stds.detach()), self.get_dist(prior_means, prior_stds))
+        kl_post = torch.distributions.kl_divergence(self.get_dist(post_means, post_stds), self.get_dist(prior_means.detach(), prior_stds.detach()))
+        kl_balanced = kl_balance_ratio * kl_prior + (1 - kl_balance_ratio) * kl_post
+        return kl_balanced
 
     def reparameterize(self, means, stds):
         eps = torch.randn_like(stds)
