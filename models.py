@@ -265,7 +265,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_prior_dist = torch.distributions.Independent(torch.distributions.Normal(state_rep_prior_means, state_rep_prior_stds), 1)
 
         # TODO: KL Balancing, don't regularize posterior to bad prior
-        state_rep_kl_loss = torch.mean(torch.sum(torch.distributions.kl_divergence(state_rep_post_dist, state_rep_prior_dist) * segmentation_samples, dim=-1))
+        state_rep_kl_loss = torch.mean(torch.sum(torch.distributions.kl_divergence(state_rep_post_dist, state_rep_prior_dist), dim=-1))
 
         # TODO: Termination prior KL
 
