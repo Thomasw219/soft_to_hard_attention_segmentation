@@ -267,8 +267,10 @@ class FullPrototypeModel(nn.Module):
         # TODO: KL Balancing, don't regularize posterior to bad prior
         state_rep_kl_loss = torch.mean(torch.sum(torch.distributions.kl_divergence(state_rep_post_dist, state_rep_prior_dist) * segmentation_samples, dim=-1))
 
+        # TODO: Termination prior KL
+
         model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
-            self.cfg.time_loss_weight * time_loss + \
+            self.time_loss_weight * time_loss + \
             self.cfg.abstract_transition_kl_weight * abstract_rep_kl_loss + \
             self.cfg.state_transition_kl_weight * state_rep_kl_loss
 
@@ -276,6 +278,7 @@ class FullPrototypeModel(nn.Module):
             loss=model_loss.item(),
             reconstruction_loss=reconstruction_loss.item(),
             time_loss=time_loss.item(),
+            average_compression=torch.minimum(1 / time_loss, torch.tensor(self.max_seq_len, device=time_loss.device)),
             abstract_transition_kl_loss=abstract_rep_kl_loss.item(),
             state_transition_kl_loss=state_rep_kl_loss.item(),
         )
@@ -325,6 +328,12 @@ class FullPrototypeModel(nn.Module):
 
         abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
         abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
+        if segmentation_attention_mask.requires_grad:
+            segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+        if causal_segmentation_attention_mask.requires_grad:
+            causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+        if abstract_causal_segmentation_attention_mask.requires_grad:
+            abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
 
         return torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
 

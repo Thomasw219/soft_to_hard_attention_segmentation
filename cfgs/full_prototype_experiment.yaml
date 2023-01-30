@@ -5,14 +5,14 @@ log_every: 50
 viz_every: 100
 np_seed: 0
 
-epochs: 1500
+epochs: 500
 
 train_dataset: {dataset_size: 10000, signal_length: 128}
 test_dataset: {dataset_size: 1000, signal_length: 128}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
-temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.5, start_step: 150, end_step: 400}
+temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.5, start_step: 50, end_step: 150}
 time_loss_weight_scheduler: {type: 'logarithmic', start_value: 0.0, end_value: 0.2, start_step: 10, end_step: 10}
 
 defaults:
