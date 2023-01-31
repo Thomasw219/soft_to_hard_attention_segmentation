@@ -216,8 +216,7 @@ class FullPrototypeModel(nn.Module):
         transformed_compression_encodings = self.compression_transformer_encoder(compression_queries, compression_encodings, mask=segmentation_attention_mask)
         abstract_rep_post_params = self.abstract_rep_post(transformed_compression_encodings)
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
-        # TODO: Make this noise depend on segmentations, i.e. have the same noise for the same segment
-        abstract_rep_stoch_samples = self.reparameterize(abstract_rep_post_means, abstract_rep_post_stds)
+        abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples)
 
         abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
         transformed_abstract_rep_encodings = prepend_null_token_transformer_encoder_pass(abstract_rep_encodings, abstract_causal_segmentation_attention_mask, self.abstract_rep_transformer_encoder, nheads=self.abstract_rep_transformer_nheads)
@@ -303,6 +302,15 @@ class FullPrototypeModel(nn.Module):
     def reparameterize(self, means, stds):
         eps = torch.randn_like(stds)
         return means + eps * stds
+
+    def reparameterize_segments(self, means, stds, segmentations):
+        segmentations = segmentations.unsqueeze(-1)
+        eps = torch.randn_like(stds)
+        seg_eps = [eps[:, 0]]
+        for i in range(1, eps.shape[1]):
+            seg_eps.append((1 - segmentations[:, i]) * seg_eps[-1] + segmentations[:, i] * eps[:, i])
+        seg_eps = torch.stack(seg_eps, dim=1)
+        return means + seg_eps * stds
 
     def get_segmentation_attention_masks(self, delta_t):
         device = delta_t.device
