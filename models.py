@@ -156,7 +156,7 @@ class FullPrototypeModel(nn.Module):
 
         self.positional_encoding = nn.Parameter(torch.randn(1, max_seq_len, cfg.positional_encoding_dim))
 
-        self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
+        self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
         segmentation_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params)
         self.segmentation_transformer_encoder = nn.TransformerEncoder(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=2)
@@ -190,7 +190,7 @@ class FullPrototypeModel(nn.Module):
 
         self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.segmentation_prior_params, output_dim=2)
 
-        self.decoder = StandardMLP(input_dim=self.state_rep_dim, **cfg.decoder_params, output_dim=data_dim)
+        self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.decoder_params, output_dim=data_dim)
 
     def forward(self, traj):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
@@ -200,7 +200,7 @@ class FullPrototypeModel(nn.Module):
         encodings = self.encoder(traj)
         broadcast_positional_encoding = self.positional_encoding[:traj.shape[1]].expand(batch_size, -1, -1)
 
-        segmentation_encodings = self.segmentation_mlp_encoder(encodings)
+        segmentation_encodings = self.segmentation_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
         segmentation_logits = self.segmentation_post(transformed_segmentation_encodings)[:, 1:, :]
         segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
@@ -236,7 +236,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
-        reconstructed_traj = self.decoder(state_rep)
+        reconstructed_traj = self.decoder(torch.cat([state_rep, abstract_rep, broadcast_positional_encoding], dim=-1))
 
         return reconstructed_traj, dict(
             segmentation_logits=segmentation_logits,
