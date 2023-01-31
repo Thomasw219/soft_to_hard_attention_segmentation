@@ -1,4 +1,5 @@
 from collections import deque
+import copy
 
 import numpy as np
 import torch
@@ -160,9 +161,12 @@ class FullPrototypeModel(nn.Module):
         self.segmentation_transformer_encoder = nn.TransformerEncoder(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=2)
 
+        self.query_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.query_mlp_encoder_params, output_dim=cfg.query_attention_dim)
+        self.query_mlp_decoder = StandardMLP(input_dim=cfg.query_attention_dim, **cfg.query_mlp_decoder_params, output_dim=cfg.query_dim)
+
         self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.compression_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
-        compression_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params)
-        self.compression_transformer_encoder = nn.TransformerEncoder(compression_transformer_encoder_layer, **cfg.compression_transformer_params)
+        compression_transformer_encoder_layer = GivenQueryTransformerEncoderLayer(d_query=cfg.query_dim, d_value=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params)
+        self.compression_transformer_encoder = GivenQueryTransformerEncoder(compression_transformer_encoder_layer, **cfg.compression_transformer_params)
         self.compression_transformer_nheads = cfg.compression_transformer_encoder_layer_params['nhead']
         self.abstract_rep_post = StandardMLP(input_dim=cfg.compression_transformer_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
@@ -190,8 +194,9 @@ class FullPrototypeModel(nn.Module):
 
     def forward(self, traj):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
-        assert traj.shape[1] <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         batch_size = traj.shape[0]
+        seq_len = traj.shape[1]
+        assert seq_len <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         encodings = self.encoder(traj)
         broadcast_positional_encoding = self.positional_encoding[:traj.shape[1]].expand(batch_size, -1, -1)
 
@@ -200,12 +205,18 @@ class FullPrototypeModel(nn.Module):
         segmentation_logits = self.segmentation_post(transformed_segmentation_encodings)[:, 1:, :]
         segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
         segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
-        segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
+        segment_weights, segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
+
+        query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
+        repeated_query_encodings = torch.cat([query_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.query_attention_dim)
+        attended_query_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_query_encodings, dim=2)
+        compression_queries = self.query_mlp_decoder(attended_query_encodings)
 
         compression_encodings = self.compression_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
-        transformed_compression_encodings = self.compression_transformer_encoder(compression_encodings, mask=segmentation_attention_mask)
+        transformed_compression_encodings = self.compression_transformer_encoder(compression_queries, compression_encodings, mask=segmentation_attention_mask)
         abstract_rep_post_params = self.abstract_rep_post(transformed_compression_encodings)
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
+        # TODO: Make this noise depend on segmentations, i.e. have the same noise for the same segment
         abstract_rep_stoch_samples = self.reparameterize(abstract_rep_post_means, abstract_rep_post_stds)
 
         abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
@@ -339,7 +350,8 @@ class FullPrototypeModel(nn.Module):
         if abstract_causal_segmentation_attention_mask.requires_grad:
             abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
 
-        return torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
+        normalized_weights = attention_weights / attention_weights.sum(dim=-1, keepdim=True)
+        return normalized_weights, torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
 
     def set_temperature(self, temperature):
         self.temperature = temperature
@@ -399,6 +411,79 @@ class StandardMLP(nn.Module):
 
     def forward(self, x):
         return self.network.forward(x)
+
+# Large portions of this transformer stuff taken from the pytorch transformer implmentation
+class GivenQueryTransformerEncoderLayer(nn.Module):
+    def __init__(
+        self,
+        d_query,
+        d_value,
+        batch_first=True,
+        nhead=8,
+        dim_feedforward=2048,
+        dropout=0.1,
+        layer_norm_eps=1e-5,
+        norm_first=True,
+        device=None,
+        dtype=None,
+    ):
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_query, nhead, kdim=d_query, vdim=d_value, dropout=dropout, batch_first=batch_first, **factory_kwargs)
+
+        self.linear1 = nn.Linear(d_value, dim_feedforward, **factory_kwargs)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_value, **factory_kwargs)
+
+        self.norm_first = norm_first
+        self.norm1 = nn.LayerNorm(d_value, eps=layer_norm_eps, **factory_kwargs)
+        self.norm2 = nn.LayerNorm(d_value, eps=layer_norm_eps, **factory_kwargs)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.activation = nn.functional.relu
+
+    def forward(self, query, x, src_mask=None):
+        if self.norm_first:
+            x = self._sa_block(query, self.norm1(x), src_mask)
+            x = self._ff_block(self.norm2(x))
+        else:
+            x = self.norm1(self._sa_block(x, src_mask))
+            x = self.norm2(self._ff_block(x))
+        return x
+
+    # self-attention block
+    def _sa_block(self, query, x, attn_mask):
+        x = self.self_attn(query, x, x,
+                           attn_mask=attn_mask,
+                           need_weights=False)[0]
+        return self.dropout1(x)
+
+    # feed forward block
+    def _ff_block(self, x):
+        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        return self.dropout2(x)
+
+def _get_clones(module, N):
+    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+
+class GivenQueryTransformerEncoder(nn.Module):
+    def __init__(self, given_query_encoder_layer, num_layers, norm=None):
+        super().__init__()
+        self.layers = _get_clones(given_query_encoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, query, src, mask=None):
+        output = src
+
+        for mod in self.layers:
+            output = mod(query, output, src_mask=mask)
+
+        if self.norm is not None:
+            output = self.norm(output)
+
+        return output
 
 def prepend_null_token_transformer_encoder_pass(transformer_input, transformer_mask, transformer, nheads, null_token=None, null_mask_value=0):
     # Expecting batch first input, so (batch_size, seq_len, input_dim)
