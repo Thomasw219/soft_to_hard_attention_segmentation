@@ -11,17 +11,17 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from data import ComplicatedSinusoid
+from data import ComplicatedSinusoid as Dataset
 from models import FullPrototypeModel
 from utils import make_scheduler
 
 @hydra.main(version_base='1.3', config_path='cfgs', config_name='full_prototype_experiment')
 def test_full_prototype(cfg):
     np.random.seed(cfg['np_seed'])
-    train_dataset = ComplicatedSinusoid(**cfg['train_dataset'])
+    train_dataset = Dataset(**cfg['train_dataset'])
     train_dataloader = DataLoader(train_dataset, **cfg['dataloader'])
 
-    test_dataset = ComplicatedSinusoid(**cfg['test_dataset'])
+    test_dataset = Dataset(**cfg['test_dataset'])
     test_dataloader = DataLoader(test_dataset, **cfg['dataloader'])
 
     model = FullPrototypeModel(cfg['model'], data_dim=1, max_seq_len=cfg['train_dataset']['signal_length'])

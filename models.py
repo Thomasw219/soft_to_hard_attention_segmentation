@@ -154,7 +154,11 @@ class FullPrototypeModel(nn.Module):
 
         self.encoder = StandardMLP(input_dim=data_dim, **cfg.encoder_params, output_dim=cfg.encoding_dim)
 
-        self.positional_encoding = nn.Parameter(torch.randn(1, max_seq_len, cfg.positional_encoding_dim))
+        if cfg.positional_encoding_type == 'learned':
+            self.positional_encoding = nn.Parameter(torch.randn(1, max_seq_len, cfg.positional_encoding_dim))
+        elif cfg.positional_encoding_type == 'sinusoid':
+            self.positional_encoding = nn.Parameter(get_sinusoidal_positional_encoding(cfg.positional_encoding_dim, max_seq_len), requires_grad=False)
+        self.positional_encoding_dropout = nn.Dropout(p=cfg.positional_encoding_dropout)
 
         self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
         segmentation_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params)
@@ -198,12 +202,16 @@ class FullPrototypeModel(nn.Module):
         seq_len = traj.shape[1]
         assert seq_len <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         encodings = self.encoder(traj)
-        broadcast_positional_encoding = self.positional_encoding[:traj.shape[1]].expand(batch_size, -1, -1)
+        broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:traj.shape[1]].expand(batch_size, -1, -1))
 
         segmentation_encodings = self.segmentation_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
         segmentation_logits = self.segmentation_post(transformed_segmentation_encodings)[:, 1:, :]
         segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
+        if segmentation_samples.requires_grad:
+            segmentation_samples.register_hook(lambda grad: 100 * grad)
+        # segmentation_samples = torch.sigmoid(segmentation_logits)[..., 0]
+        # segmentation_samples = torch.bernoulli(segmentation_samples) + segmentation_samples - segmentation_samples.detach()
         segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
         segment_weights, segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
 
@@ -236,9 +244,11 @@ class FullPrototypeModel(nn.Module):
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
+        # state_rep = torch.zeros_like(state_rep)
         reconstructed_traj = self.decoder(torch.cat([state_rep, abstract_rep, broadcast_positional_encoding], dim=-1))
 
         return reconstructed_traj, dict(
+            segment_weights=segment_weights,
             segmentation_logits=segmentation_logits,
             segmentation_samples=segmentation_samples,
             abstract_rep_post_means=abstract_rep_post_means,
@@ -262,10 +272,11 @@ class FullPrototypeModel(nn.Module):
         time_loss = torch.mean(segmentation_samples[:, 1:])
 
         abstract_rep_post_means, abstract_rep_post_stds = info['abstract_rep_post_means'], info['abstract_rep_post_stds']
-        abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
+        # abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
+        abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
 
         # TODO: Don't include time loss factor into KL loss, keep them factorized
-        abstract_rep_kl_loss = torch.mean(torch.sum(self.kl_balance(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance) * segmentation_samples, dim=-1))
+        abstract_rep_kl_loss = torch.mean((self.kl_balance(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
 
         state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
         state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
@@ -419,6 +430,14 @@ class StandardMLP(nn.Module):
 
     def forward(self, x):
         return self.network.forward(x)
+
+def get_sinusoidal_positional_encoding(dim, max_len):
+    position = torch.arange(max_len).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, dim, 2) * (-np.log(10000.0) / dim))
+    pe = torch.zeros(1, max_len, dim)
+    pe[0, :, 0::2] = torch.sin(position * div_term)
+    pe[0, :, 1::2] = torch.cos(position * div_term)
+    return pe
 
 # Large portions of this transformer stuff taken from the pytorch transformer implmentation
 class GivenQueryTransformerEncoderLayer(nn.Module):
