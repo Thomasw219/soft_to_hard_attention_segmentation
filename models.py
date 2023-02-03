@@ -192,7 +192,7 @@ class FullPrototypeModel(nn.Module):
         self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim + self.abstract_rep_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
 
-        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.segmentation_prior_params, output_dim=2)
+        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.segmentation_prior_params, output_dim=1)
 
         self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.decoder_params, output_dim=data_dim)
 
@@ -209,7 +209,7 @@ class FullPrototypeModel(nn.Module):
         segmentation_logits = self.segmentation_post(transformed_segmentation_encodings)[:, 1:, :]
         segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
         if segmentation_samples.requires_grad:
-            segmentation_samples.register_hook(lambda grad: 100 * grad)
+            segmentation_samples.register_hook(lambda grad: self.cfg.time_grad_scalar * grad)
         # segmentation_samples = torch.sigmoid(segmentation_logits)[..., 0]
         # segmentation_samples = torch.bernoulli(segmentation_samples) + segmentation_samples - segmentation_samples.detach()
         segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
@@ -245,7 +245,9 @@ class FullPrototypeModel(nn.Module):
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
         # state_rep = torch.zeros_like(state_rep)
-        reconstructed_traj = self.decoder(torch.cat([state_rep, abstract_rep, broadcast_positional_encoding], dim=-1))
+        decoder_input = torch.cat([state_rep, abstract_rep, broadcast_positional_encoding], dim=-1)
+        segmentation_prior_logits = self.segmentation_prior(decoder_input)[:, :-1]
+        reconstructed_traj = self.decoder(decoder_input)
 
         return reconstructed_traj, dict(
             segment_weights=segment_weights,
@@ -261,6 +263,7 @@ class FullPrototypeModel(nn.Module):
             state_rep_prior_means=state_rep_prior_means,
             state_rep_prior_stds=state_rep_prior_stds,
             state_rep=state_rep,
+            segmentation_prior_logits=segmentation_prior_logits,
         )
 
     def get_loss(self, traj):
@@ -272,8 +275,8 @@ class FullPrototypeModel(nn.Module):
         time_loss = torch.mean(segmentation_samples[:, 1:])
 
         abstract_rep_post_means, abstract_rep_post_stds = info['abstract_rep_post_means'], info['abstract_rep_post_stds']
-        # abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
-        abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
+        abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
+        # abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
 
         # TODO: Don't include time loss factor into KL loss, keep them factorized
         abstract_rep_kl_loss = torch.mean((self.kl_balance(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
@@ -283,7 +286,7 @@ class FullPrototypeModel(nn.Module):
 
         state_rep_kl_loss = torch.mean(torch.sum(self.kl_balance(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance), dim=-1))
 
-        # TODO: Termination prior KL
+        # segmentation_kl_loss = torch.mean()
 
         model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
             self.time_loss_weight * time_loss + \

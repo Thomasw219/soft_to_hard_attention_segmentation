@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from data import ComplicatedSinusoid as Dataset
+from data import RandomSizePiecewiseSine as Dataset
 from models import FullPrototypeModel
 from utils import make_scheduler
 
