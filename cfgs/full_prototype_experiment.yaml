@@ -13,7 +13,7 @@ test_dataset: {dataset_size: 1000, signal_length: 128}
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
 temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 50, end_step: 500}
-time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.05, start_step: 0, end_step: 0}
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.10, start_step: 0, end_step: 0}
 
 defaults:
   - model: full_prototype_v1

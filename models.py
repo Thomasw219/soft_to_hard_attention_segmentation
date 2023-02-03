@@ -229,7 +229,7 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
         transformed_abstract_rep_encodings = prepend_null_token_transformer_encoder_pass(abstract_rep_encodings, abstract_causal_segmentation_attention_mask, self.abstract_rep_transformer_encoder, nheads=self.abstract_rep_transformer_nheads)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
-        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter))
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
 
@@ -240,7 +240,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
         transformed_state_rep_encodings = prepend_null_token_transformer_encoder_pass(state_rep_encodings, causal_segmentation_attention_mask, self.state_rep_transformer_encoder, nheads=self.state_rep_transformer_nheads)
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
-        state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter) * (1 - segmentation_samples), abstract_rep], dim=-1))
+        state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples).unsqueeze(-1), abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
@@ -279,19 +279,22 @@ class FullPrototypeModel(nn.Module):
         # abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
 
         # TODO: Don't include time loss factor into KL loss, keep them factorized
-        abstract_rep_kl_loss = torch.mean((self.kl_balance(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
+        abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
 
         state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
         state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
 
-        state_rep_kl_loss = torch.mean(torch.sum(self.kl_balance(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance), dim=-1))
+        state_rep_kl_loss = torch.mean(self.kl_balance_gaussian(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance))
 
-        # segmentation_kl_loss = torch.mean()
+        segmentation_post_logits = (info['segmentation_logits'][..., 1:2] - info['segmentation_logits'][..., 0:1])
+        segmentation_prior_logits = info['segmentation_prior_logits']
+        segmentation_kl_loss = torch.mean(self.kl_balance_bernoulli(segmentation_prior_logits, segmentation_post_logits, self.cfg.segmentation_kl_balance))
 
         model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
             self.time_loss_weight * time_loss + \
             self.cfg.abstract_transition_kl_weight * abstract_rep_kl_loss + \
-            self.cfg.state_transition_kl_weight * state_rep_kl_loss
+            self.cfg.state_transition_kl_weight * state_rep_kl_loss + \
+            self.cfg.segmentation_kl_weight * segmentation_kl_loss
 
         metrics = dict(
             loss=model_loss.item(),
@@ -300,16 +303,26 @@ class FullPrototypeModel(nn.Module):
             average_compression=torch.minimum(1 / time_loss, torch.tensor(self.max_seq_len, device=time_loss.device)).item(),
             abstract_transition_kl_loss=abstract_rep_kl_loss.item(),
             state_transition_kl_loss=state_rep_kl_loss.item(),
+            segmentation_kl_loss=segmentation_kl_loss.item(),
         )
 
         return model_loss, metrics, info
 
-    def get_dist(self, means, stds):
+    def get_dist_gaussian(self, means, stds):
         return torch.distributions.Independent(torch.distributions.Normal(means, stds), 1)
 
-    def kl_balance(self, prior_means, prior_stds, post_means, post_stds, kl_balance_ratio):
-        kl_prior = torch.distributions.kl_divergence(self.get_dist(post_means.detach(), post_stds.detach()), self.get_dist(prior_means, prior_stds))
-        kl_post = torch.distributions.kl_divergence(self.get_dist(post_means, post_stds), self.get_dist(prior_means.detach(), prior_stds.detach()))
+    def kl_balance_gaussian(self, prior_means, prior_stds, post_means, post_stds, kl_balance_ratio):
+        kl_prior = torch.distributions.kl_divergence(self.get_dist_gaussian(post_means.detach(), post_stds.detach()), self.get_dist_gaussian(prior_means, prior_stds))
+        kl_post = torch.distributions.kl_divergence(self.get_dist_gaussian(post_means, post_stds), self.get_dist_gaussian(prior_means.detach(), prior_stds.detach()))
+        kl_balanced = kl_balance_ratio * kl_prior + (1 - kl_balance_ratio) * kl_post
+        return kl_balanced
+
+    def get_dist_bernoulli(self, logits):
+        return torch.distributions.Independent(torch.distributions.Bernoulli(logits=logits), 1)
+
+    def kl_balance_bernoulli(self, prior_logits, post_logits, kl_balance_ratio):
+        kl_prior = torch.distributions.kl_divergence(self.get_dist_bernoulli(post_logits.detach()), self.get_dist_bernoulli(prior_logits))
+        kl_post = torch.distributions.kl_divergence(self.get_dist_bernoulli(post_logits), self.get_dist_bernoulli(prior_logits.detach()))
         kl_balanced = kl_balance_ratio * kl_prior + (1 - kl_balance_ratio) * kl_post
         return kl_balanced
 
@@ -407,7 +420,7 @@ def get_activation(activation):
         return NotImplementedError("Activation not implemented yet")
 
 def shift_forward(x, shift):
-    return torch.cat([torch.zeros_like(x[:, :-shift]), x[:, :-shift]], dim=1)
+    return torch.cat([torch.zeros_like(x[:, -shift:]), x[:, :-shift]], dim=1)
 
 class StandardMLP(nn.Module):
     def __init__(self, input_dim, layer_sizes=[400, 400, 400, 400], output_dim=1, activate_last=False, activation='elu'):

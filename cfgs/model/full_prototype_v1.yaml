@@ -3,6 +3,8 @@ abstract_transition_kl_weight: 0.0001
 abstract_kl_balance: 0.8
 state_transition_kl_weight: 0.1
 state_kl_balance: 0.8
+segmentation_kl_weight: 0.1
+segmentation_kl_balance: 0.8
 time_loss_weight: 0.0 # Handled by scheduler
 init_temperature: 1.0 # Handled by scheduler
 time_grad_scalar: 100
