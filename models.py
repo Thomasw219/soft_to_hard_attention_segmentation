@@ -229,7 +229,7 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
         transformed_abstract_rep_encodings = prepend_null_token_transformer_encoder_pass(abstract_rep_encodings, abstract_causal_segmentation_attention_mask, self.abstract_rep_transformer_encoder, nheads=self.abstract_rep_transformer_nheads)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
-        abstract_rep_prior_params = self.abstract_rep_prior(abstract_rep_deter)
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
 
@@ -240,7 +240,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
         transformed_state_rep_encodings = prepend_null_token_transformer_encoder_pass(state_rep_encodings, causal_segmentation_attention_mask, self.state_rep_transformer_encoder, nheads=self.state_rep_transformer_nheads)
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
-        state_rep_prior_params = self.state_rep_prior(torch.cat([state_rep_deter, abstract_rep], dim=-1))
+        state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter) * (1 - segmentation_samples), abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
@@ -356,12 +356,12 @@ class FullPrototypeModel(nn.Module):
         segmentation_attention_mask = segmentation_attention_mask.reshape(batch_size * self.compression_transformer_nheads, seq_len, seq_len)
 
         all_indices = seq_indices - seq_len
-        causal_attention_weights = torch.where(torch.zeros(1, device=device) > all_indices, attention_weights, torch.zeros_like(attention_weights))
+        causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, attention_weights, torch.zeros_like(attention_weights))
 
         causal_segmentation_attention_mask = causal_attention_weights.unsqueeze(1).expand(batch_size, self.state_rep_transformer_nheads, seq_len, seq_len)
         causal_segmentation_attention_mask = causal_segmentation_attention_mask.reshape(batch_size * self.state_rep_transformer_nheads, seq_len, seq_len)
 
-        abstract_causal_attention_weights = torch.where(torch.zeros(1, device=device) > all_indices, torch.ones_like(attention_weights) - attention_weights, torch.zeros_like(attention_weights))
+        abstract_causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, torch.ones_like(attention_weights), torch.zeros_like(attention_weights))
 
         abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
         abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
@@ -405,6 +405,9 @@ def get_activation(activation):
         return nn.ReLU
     else:
         return NotImplementedError("Activation not implemented yet")
+
+def shift_forward(x, shift):
+    return torch.cat([torch.zeros_like(x[:, :-shift]), x[:, :-shift]], dim=1)
 
 class StandardMLP(nn.Module):
     def __init__(self, input_dim, layer_sizes=[400, 400, 400, 400], output_dim=1, activate_last=False, activation='elu'):
