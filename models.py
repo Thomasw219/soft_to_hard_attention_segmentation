@@ -227,7 +227,7 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples)
 
         abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
-        transformed_abstract_rep_encodings = prepend_null_token_transformer_encoder_pass(abstract_rep_encodings, abstract_causal_segmentation_attention_mask, self.abstract_rep_transformer_encoder, nheads=self.abstract_rep_transformer_nheads)
+        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
         abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
@@ -238,7 +238,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds)
 
         state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
-        transformed_state_rep_encodings = prepend_null_token_transformer_encoder_pass(state_rep_encodings, causal_segmentation_attention_mask, self.state_rep_transformer_encoder, nheads=self.state_rep_transformer_nheads)
+        transformed_state_rep_encodings = self.state_rep_transformer_encoder(state_rep_encodings, mask=causal_segmentation_attention_mask)
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
         state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples).unsqueeze(-1), abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])

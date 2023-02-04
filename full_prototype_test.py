@@ -115,6 +115,9 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
         delta_t_logit_ax = delta_t_logit_fig.add_subplot(n_samples, 1, i+1)
         delta_t_logit_ax.plot(plt_prep(info['segmentation_logits'][i, :, 0]), label='0 logits', c='b')
         delta_t_logit_ax.plot(plt_prep(info['segmentation_logits'][i, :, 1]), label='1 logits', c='g')
+        prior_logit_ax = delta_t_logit_ax.twinx()
+        prior_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0])), label='prior prob', c='r')
+        prior_logit_ax.set_ylim(0, 1)
 
         # Plot latent features for sequence
         latent_features_ax = latent_features_fig.add_subplot(n_samples, 1, i+1)
@@ -125,6 +128,7 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
             plot_ax.legend()
             delta_t_ax.legend()
             delta_t_logit_ax.legend()
+            prior_logit_ax.legend()
 
     logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
     logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
