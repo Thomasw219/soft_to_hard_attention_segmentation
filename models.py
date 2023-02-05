@@ -389,7 +389,6 @@ class FullPrototypeModel(nn.Module):
         return normalized_weights, torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
 
     def get_segmentation_attention_masks_probabilistic(self, segmentation_probs):
-        print(segmentation_probs)
         device = segmentation_probs.device
         batch_size = segmentation_probs.shape[0]
         seq_len = segmentation_probs.shape[1]
