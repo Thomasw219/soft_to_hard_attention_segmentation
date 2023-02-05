@@ -202,7 +202,7 @@ class FullPrototypeModel(nn.Module):
         seq_len = traj.shape[1]
         assert seq_len <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         encodings = self.encoder(traj)
-        broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:traj.shape[1]].expand(batch_size, -1, -1))
+        broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:, :traj.shape[1]].expand(batch_size, -1, -1))
 
         segmentation_encodings = self.segmentation_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
@@ -213,7 +213,7 @@ class FullPrototypeModel(nn.Module):
         # segmentation_samples = torch.sigmoid(segmentation_logits)[..., 0]
         # segmentation_samples = torch.bernoulli(segmentation_samples) + segmentation_samples - segmentation_samples.detach()
         segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
-        segment_weights, segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks(segmentation_samples)
+        segment_weights, segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
         query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         repeated_query_encodings = torch.cat([query_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.query_attention_dim)
@@ -361,6 +361,58 @@ class FullPrototypeModel(nn.Module):
 
             attention_weights.append(torch.maximum(1 - forward_elapsed_t, torch.zeros_like(forward_elapsed_t)))
             attention_weights.appendleft(torch.maximum(1 - backward_elapsed_t, torch.zeros_like(backward_elapsed_t)))
+
+        attention_weights = torch.stack(list(attention_weights), dim=-1)
+        seq_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).unsqueeze(1) + (seq_len - torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)).unsqueeze(-1)
+        attention_weights = torch.gather(attention_weights, 2, seq_indices)
+        segmentation_attention_mask = attention_weights.unsqueeze(1).expand(batch_size, self.compression_transformer_nheads, seq_len, seq_len)
+        segmentation_attention_mask = segmentation_attention_mask.reshape(batch_size * self.compression_transformer_nheads, seq_len, seq_len)
+
+        all_indices = seq_indices - seq_len
+        causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, attention_weights, torch.zeros_like(attention_weights))
+
+        causal_segmentation_attention_mask = causal_attention_weights.unsqueeze(1).expand(batch_size, self.state_rep_transformer_nheads, seq_len, seq_len)
+        causal_segmentation_attention_mask = causal_segmentation_attention_mask.reshape(batch_size * self.state_rep_transformer_nheads, seq_len, seq_len)
+
+        abstract_causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, torch.ones_like(attention_weights), torch.zeros_like(attention_weights))
+
+        abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
+        abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
+        if segmentation_attention_mask.requires_grad:
+            segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+        if causal_segmentation_attention_mask.requires_grad:
+            causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+        if abstract_causal_segmentation_attention_mask.requires_grad:
+            abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+
+        normalized_weights = attention_weights / attention_weights.sum(dim=-1, keepdim=True)
+        return normalized_weights, torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
+
+    def get_segmentation_attention_masks_probabilistic(self, segmentation_probs):
+        print(segmentation_probs)
+        device = segmentation_probs.device
+        batch_size = segmentation_probs.shape[0]
+        seq_len = segmentation_probs.shape[1]
+        assert seq_len <= self.max_seq_len
+        padding = torch.ones(batch_size, seq_len, device=device)
+        segmentation_probs = torch.cat([padding, segmentation_probs, padding], dim=1)
+        attention_weights = deque([torch.ones(batch_size, seq_len, device=device)])
+
+        forward_p_same_segment = torch.ones(batch_size, seq_len, device=device)
+        backward_p_same_segment = torch.ones(batch_size, seq_len, device=device)
+
+        no_segmentation_probs = 1 - segmentation_probs
+
+        base_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len) + seq_len
+        for i in range(seq_len):
+            forward_indices = base_indices + i + 1
+            backward_indices = base_indices - i
+
+            forward_p_same_segment = forward_p_same_segment * torch.gather(no_segmentation_probs, 1, forward_indices)
+            backward_p_same_segment = backward_p_same_segment * torch.gather(no_segmentation_probs, 1, backward_indices)
+
+            attention_weights.append(forward_p_same_segment)
+            attention_weights.appendleft(backward_p_same_segment)
 
         attention_weights = torch.stack(list(attention_weights), dim=-1)
         seq_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).unsqueeze(1) + (seq_len - torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)).unsqueeze(-1)
