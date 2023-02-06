@@ -229,9 +229,6 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
         transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
-        # print("abstract rep encodings", abstract_rep_encodings[:, :1])
-        # print("abstract causal segmentation attention mask", abstract_causal_segmentation_attention_mask[:, :1])
-        # print("transformed abstract rep encodings", transformed_abstract_rep_encodings[:, :1])
         abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
@@ -242,10 +239,6 @@ class FullPrototypeModel(nn.Module):
 
         state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
         transformed_state_rep_encodings = self.state_rep_transformer_encoder(state_rep_encodings, mask=causal_segmentation_attention_mask)
-        print("state rep transformer encoder", self.state_rep_transformer_encoder)
-        print("state rep encodings", state_rep_encodings[:, :1])
-        print("causal segmentation attention mask", causal_segmentation_attention_mask[:, :1])
-        print("transformed state rep encodings", transformed_state_rep_encodings[:, :1])
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
         state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples).unsqueeze(-1), abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
@@ -315,44 +308,31 @@ class FullPrototypeModel(nn.Module):
 
         return model_loss, metrics, info
 
-    def generate(self, batch_size, abstract_sample_std_scalar=0, state_sample_std_scalar=0, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None):
+    def generate(self, batch_size, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0, generation_length=None):
         device = self.positional_encoding.device
         if generation_length is None:
             generation_length = self.max_seq_len
 
         broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:, :generation_length].expand(batch_size, -1, -1))
 
-        if given_segmentations is None:
-            segmentations = torch.zeros(batch_size, 1, device=device, dtype=torch.float32)
-            segmentations[:, 0] = 1
-        else:
-            segmentations = given_segmentations
+        segmentations = torch.zeros(batch_size, generation_length, device=device, dtype=torch.float32)
+        segmentations[:, 0] = 1
 
         abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
-        if given_abstract_stoch is not None:
-            abstract_rep[..., :self.cfg.abstract_rep_stoch_dim] = given_abstract_stoch
 
         state_rep = torch.zeros(batch_size, generation_length, self.state_rep_dim, device=device, dtype=torch.float32)
-        if given_state_stoch is not None:
-            state_rep[..., :self.cfg.state_rep_stoch_dim] = given_state_stoch
 
         generated_traj = torch.zeros(batch_size, generation_length, self.data_dim, device=device, dtype=torch.float32)
 
-        abstract_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
-        state_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.state_rep_stoch_dim, device=device, dtype=torch.float32)
-
-        abstract_eps = torch.randn(batch_size, generation_length, 1, device=device, dtype=torch.float32)
+        abstract_eps = torch.randn(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
         abstract_seg_eps = torch.zeros_like(abstract_eps)
 
         for i in range(generation_length):
             abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1, -self.cfg.abstract_rep_deter_dim:], 1)[:, -1:])
             abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
-            if given_abstract_stoch is None:
-                abstract_seg_eps[:, i:i + 1] = abstract_eps[:, i:i + 1] if i == 0 else (1 - segmentations[:, i:i + 1]) * abstract_seg_eps[:, i - 1:i] + segmentations[:, i:i + 1] * abstract_eps[:, i:i + 1]
-                abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
-                abstract_rep[:, i:i + 1, :self.cfg.abstract_rep_stoch_dim] = abstract_rep_stoch_samples
-            else:
-                abstract_stoch_means[:, i:i + 1] = abstract_rep_prior_means
+            abstract_seg_eps[:, i:i + 1] = abstract_eps[:, i:i + 1] if i == 0 else (1 - segmentations[:, i:i + 1]).unsqueeze(-1) * abstract_seg_eps[:, i - 1:i] + segmentations[:, i:i + 1].unsqueeze(-1) * abstract_eps[:, i:i + 1]
+            abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
+            abstract_rep[:, i:i + 1, :self.cfg.abstract_rep_stoch_dim] = abstract_rep_stoch_samples
 
             segmentation_samples = segmentations[:, :i + 1]
             _, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
@@ -365,11 +345,8 @@ class FullPrototypeModel(nn.Module):
 
             state_rep_prior_params = self.state_rep_prior(torch.cat([(shift_forward(state_rep[:, :i + 1, -self.cfg.state_rep_deter_dim:], 1))[:, -1:] * (1 - segmentation_samples[:, -1:]).unsqueeze(-1), abstract_rep[:, i:i + 1]], dim=-1))
             state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
-            if given_state_stoch is None:
-                state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * torch.randn_like(state_rep_prior_means) * state_sample_std_scalar
-                state_rep[:, i:i + 1, :self.cfg.state_rep_stoch_dim] = state_rep_stoch
-            else:
-                state_stoch_means[:, i:i + 1] = state_rep_prior_means
+            state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * torch.randn_like(state_rep_prior_means) * state_sample_std_scalar
+            state_rep[:, i:i + 1, :self.cfg.state_rep_stoch_dim] = state_rep_stoch
 
             state_stoch_hist = state_rep[:, :i + 1, :self.cfg.state_rep_stoch_dim]
             abstract_rep_hist = abstract_rep[:, :i + 1]
@@ -381,15 +358,12 @@ class FullPrototypeModel(nn.Module):
             decoder_input = torch.cat([state_rep[:, i:i + 1], abstract_rep[:, i:i + 1], broadcast_positional_encoding[:, i:i + 1]], dim=-1)
             generated_traj[:, i:i + 1] = self.decoder(decoder_input)
 
-            if given_segmentations is None:
-                if i < generation_length - 1:
-                    segmentation_prior_logits = self.segmentation_prior(decoder_input)[:, :-1]
-                    segmentation_samples = torch.distributions.Bernoulli(logits=segmentation_prior_logits).sample()
-                    segmentations[:, i + 1:i + 2] = segmentation_samples
+            if i < generation_length - 1:
+                segmentation_prior_logits = self.segmentation_prior(decoder_input)
+                segmentation_samples = torch.distributions.Bernoulli(logits=segmentation_prior_logits).sample()
+                segmentations[:, i + 1:i + 2] = segmentation_samples.squeeze(-1)
 
         return generated_traj, dict(
-            abstract_stoch_means=abstract_stoch_means,
-            state_stoch_means=state_stoch_means,
             abstract_rep=abstract_rep,
             state_rep=state_rep,
             segmentations=segmentations,
@@ -740,23 +714,9 @@ def test_full_prototype_generation():
     with initialize(version_base="1.3", config_path="cfgs/model/"):
         cfg = compose(config_name="full_prototype_v1")
         model = FullPrototypeModel(cfg, data_dim=data_dim, max_seq_len=seq_len)
-        model.hard_sample()
 
-        traj = torch.randn(batch_size, seq_len, data_dim)
-        reconstruction, info, = model.forward(traj, abstract_sample_std_scalar=0.0, state_sample_std_scalar=0.0)
-        print("Forward reconstruction:", reconstruction)
-        # print("Forward abs prior: ", info['abstract_rep_prior_means'])
-        # print("Forward abs rep", info['abstract_rep'])
-        # print("Forward state prior: ", info['state_rep_prior_means'])
-        print("Forward state rep", info['state_rep'])
-        print("Segmentations", info['segmentation_samples'])
-
-        generation, info = model.generate(2, generation_length=seq_len, given_segmentations=info['segmentation_samples'], given_abstract_stoch=info['abstract_rep'][..., :model.cfg.abstract_rep_stoch_dim], given_state_stoch=info['state_rep'][..., :model.cfg.state_rep_stoch_dim], abstract_sample_std_scalar=0.0, state_sample_std_scalar=0.0)
+        generation, _ = model.generate(2, generation_length=seq_len)
         print("Generation reconstruction:", generation)
-        # print("Generation abs prior: ", info['abstract_stoch_means'])
-        # print("Generation abs rep", info['abstract_rep'])
-        # print("Generation state prior: ", info['state_stoch_means'])
-        print("Generation state rep", info['state_rep'])
 
 if __name__ == '__main__':
     # test_temporal_attention()
