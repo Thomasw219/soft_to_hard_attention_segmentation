@@ -50,7 +50,7 @@ state_rep_post_params: {layer_sizes: [256], activate_last: False, activation: 'e
 state_rep_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 state_rep_context_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 state_rep_transformer_dim: 64
-state_rep_transformer_encoder_layer_params: {nhead: 4, dim_feedforward: 256, batch_first: True}
+state_rep_transformer_encoder_layer_params: {nhead: 4, dim_feedforward: 256, batch_first: True, dropout: 0.0}
 state_rep_transformer_params: {num_layers: 2}
 state_rep_mlp_decoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 
