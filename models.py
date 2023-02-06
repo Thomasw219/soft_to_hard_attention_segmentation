@@ -315,7 +315,9 @@ class FullPrototypeModel(nn.Module):
 
         broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:, :generation_length].expand(batch_size, -1, -1))
 
+        segmentation_probs = torch.zeros(batch_size, generation_length, device=device, dtype=torch.float32)
         segmentations = torch.zeros(batch_size, generation_length, device=device, dtype=torch.float32)
+        segmentation_probs[:, 0] = 1
         segmentations[:, 0] = 1
 
         abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
@@ -361,12 +363,14 @@ class FullPrototypeModel(nn.Module):
             if i < generation_length - 1:
                 segmentation_prior_logits = self.segmentation_prior(decoder_input)
                 segmentation_samples = torch.distributions.Bernoulli(logits=segmentation_prior_logits).sample()
+                segmentation_probs[:, i + 1:i + 2] = torch.sigmoid(segmentation_prior_logits).squeeze(-1)
                 segmentations[:, i + 1:i + 2] = segmentation_samples.squeeze(-1)
 
         return generated_traj, dict(
             abstract_rep=abstract_rep,
             state_rep=state_rep,
-            segmentations=segmentations,
+            segmentation_samples=segmentations,
+            segmentation_probs=segmentation_probs,
         )
 
     def get_dist_gaussian(self, means, stds):

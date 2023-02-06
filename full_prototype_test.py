@@ -82,6 +82,7 @@ def test_full_prototype(cfg):
                 logger.add_scalar(k, v, global_step)
 
             visualize(info, logger, global_step, prefix='test')
+            visualize_generations(model, logger, global_step, prefix='test')
 
 def get_optimizer(cfg, model):
     if cfg['type'] == 'adam':
@@ -139,6 +140,31 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     delta_t_fig.clf()
     delta_t_logit_fig.clf()
     latent_features_fig.clf()
+
+def visualize_generations(model, logger, global_step, n_samples=3, prefix='test'):
+    generated_trajs, info = model.generate(n_samples, generation_length=model.max_seq_len)
+    plot_fig = plt.figure(0)
+    segmentation_prob_fig = plt.figure(1)
+    for i in range(n_samples):
+        # Plot generated trajectories and discrete segmentation points
+        plot_ax = plot_fig.add_subplot(n_samples, 1, i+1)
+        plot_ax.plot(plt_prep(generated_trajs[i]), label='generated', zorder=10, c='g')
+        segmentations = plt_prep(info['segmentation_samples'][i])
+        indices = np.arange(segmentations.shape[0])
+        plot_ax.vlines(indices[segmentations == 1], np.min(plt_prep(generated_trajs[i])), np.max(plt_prep(generated_trajs[i])), label='segmentations', zorder=0, color='k')
+
+        segmentation_prob_ax = segmentation_prob_fig.add_subplot(n_samples, 1, i+1)
+        segmentation_prob_ax.plot(plt_prep(info['segmentation_probs'][i, :]), label='segmentation probability', c='b')
+
+        if i == 0:
+            plot_ax.legend()
+            segmentation_prob_ax.legend()
+
+    logger.add_figure(prefix + '/generation', plot_fig, global_step)
+    logger.add_figure(prefix + '/generation_segmentation_prob', segmentation_prob_fig, global_step)
+
+    plot_fig.clf()
+    segmentation_prob_fig.clf()
 
 if __name__ == '__main__':
     test_full_prototype()

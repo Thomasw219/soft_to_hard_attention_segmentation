@@ -1,5 +1,5 @@
 log_dir: 'logs/full_prototype'
-name: 'full_prototype_probabilistic_segmentation_easy_data'
+name: 'full_prototype_probabilistic_segmentation_with_generation'
 device: 'cuda:0'
 log_every: 50
 viz_every: 100
