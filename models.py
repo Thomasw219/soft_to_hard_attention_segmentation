@@ -206,7 +206,7 @@ class FullPrototypeModel(nn.Module):
 
         segmentation_encodings = self.segmentation_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
-        segmentation_logits = self.segmentation_post(transformed_segmentation_encodings)[:, 1:, :]
+        segmentation_logits = self.segmentation_post(transformed_segmentation_encodings)[:, :-1, :]
         segmentation_samples = nn.functional.gumbel_softmax(segmentation_logits, tau=self.temperature, hard=self.sample, dim=-1)[..., 1]
         if segmentation_samples.requires_grad:
             segmentation_samples.register_hook(lambda grad: self.cfg.time_grad_scalar * grad)

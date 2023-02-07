@@ -37,6 +37,7 @@ def test_full_prototype(cfg):
 
     epoch_steps = len(train_dataloader)
     global_step = 0
+    best_test_loss = np.inf
     for epoch in tqdm(range(cfg['epochs']), desc='Epoch', total=cfg['epochs'], position=0):
         temp = temp_scheduler.get_value(epoch)
         model.set_temperature(temp)
@@ -80,6 +81,10 @@ def test_full_prototype(cfg):
             metrics = {f'test/{k}' : v for k, v in metrics.items()}
             for k, v in metrics.items():
                 logger.add_scalar(k, v, global_step)
+
+            if metrics['test/loss'] < best_test_loss:
+                best_test_loss = metrics['test/loss']
+                torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_model.pt'))
 
             visualize(info, logger, global_step, prefix='test')
             visualize_generations(model, logger, global_step, prefix='test')
