@@ -1,13 +1,13 @@
 reconstruction_loss_weight: 1.0
-abstract_transition_kl_weight: 0.0001
+abstract_transition_kl_weight: 0.01
 abstract_kl_balance: 0.8
 state_transition_kl_weight: 10.0
 state_kl_balance: 0.8
-segmentation_kl_weight: 0.1
+segmentation_kl_weight: 1.0
 segmentation_kl_balance: 0.8
 time_loss_weight: 0.0 # Handled by scheduler
 init_temperature: 1.0 # Handled by scheduler
-time_grad_scalar: 100
+time_grad_scalar: 1
 
 encoder_params: {layer_sizes: [], activate_last: False, activation: 'elu'}
 encoding_dim: 32
