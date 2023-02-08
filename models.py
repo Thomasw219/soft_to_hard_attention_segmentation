@@ -308,7 +308,7 @@ class FullPrototypeModel(nn.Module):
 
         return model_loss, metrics, info
 
-    def generate(self, batch_size, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0, generation_length=None):
+    def generate(self, batch_size, abstract_sample_std_scalar=0, state_sample_std_scalar=0, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None):
         device = self.positional_encoding.device
         if generation_length is None:
             generation_length = self.max_seq_len
@@ -319,12 +319,21 @@ class FullPrototypeModel(nn.Module):
         segmentations = torch.zeros(batch_size, generation_length, device=device, dtype=torch.float32)
         segmentation_probs[:, 0] = 1
         segmentations[:, 0] = 1
+        if given_segmentations is not None:
+            segmentations = given_segmentations
 
         abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
+        if given_abstract_stoch is not None:
+            abstract_rep[..., :self.cfg.abstract_rep_stoch_dim] = given_abstract_stoch
 
         state_rep = torch.zeros(batch_size, generation_length, self.state_rep_dim, device=device, dtype=torch.float32)
+        if given_state_stoch is not None:
+            state_rep[..., :self.cfg.state_rep_stoch_dim] = given_state_stoch
 
         generated_traj = torch.zeros(batch_size, generation_length, self.data_dim, device=device, dtype=torch.float32)
+
+        abstract_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
+        state_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.state_rep_stoch_dim, device=device, dtype=torch.float32)
 
         abstract_eps = torch.randn(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
         abstract_seg_eps = torch.zeros_like(abstract_eps)
@@ -332,23 +341,34 @@ class FullPrototypeModel(nn.Module):
         for i in range(generation_length):
             abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1, -self.cfg.abstract_rep_deter_dim:], 1)[:, -1:])
             abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
-            abstract_seg_eps[:, i:i + 1] = abstract_eps[:, i:i + 1] if i == 0 else (1 - segmentations[:, i:i + 1]).unsqueeze(-1) * abstract_seg_eps[:, i - 1:i] + segmentations[:, i:i + 1].unsqueeze(-1) * abstract_eps[:, i:i + 1]
-            abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
-            abstract_rep[:, i:i + 1, :self.cfg.abstract_rep_stoch_dim] = abstract_rep_stoch_samples
+            if given_abstract_stoch is None:
+                segment = segmentations[:, i:i + 1].unsqueeze(-1)
+                if i == 0:
+                    abstract_seg_eps[:, i:i + 1] = abstract_eps[:, i:i + 1]
+                    abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
+                else:
+                    abstract_seg_eps[:, i:i + 1] = (1 - segment) * abstract_seg_eps[:, i - 1:i] + segment * abstract_eps[:, i:i + 1]
+                    abstract_rep_stoch_samples = (1 - segment) * abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar + segment * abstract_rep[:, i - 1:i, :self.cfg.abstract_rep_stoch_dim]
+                abstract_rep[:, i:i + 1, :self.cfg.abstract_rep_stoch_dim] = abstract_rep_stoch_samples
+            else:
+                abstract_stoch_means[:, i:i + 1] = abstract_rep_prior_means
 
             segmentation_samples = segmentations[:, :i + 1]
             _, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
             abstract_stoch_hist = abstract_rep[:, :i + 1, :self.cfg.abstract_rep_stoch_dim]
-            abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_stoch_hist, broadcast_positional_encoding[:, :i + 1]], dim=-1)) * segmentation_samples.unsqueeze(-1)
-            transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+            abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_stoch_hist, broadcast_positional_encoding[:, :i + 1]], dim=-1))
+            transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_stoch_hist, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
             abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
             abstract_rep[:, i:i + 1, -self.cfg.abstract_rep_deter_dim:] = abstract_rep_deter[:, -1:]
 
             state_rep_prior_params = self.state_rep_prior(torch.cat([(shift_forward(state_rep[:, :i + 1, -self.cfg.state_rep_deter_dim:], 1))[:, -1:] * (1 - segmentation_samples[:, -1:]).unsqueeze(-1), abstract_rep[:, i:i + 1]], dim=-1))
             state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
-            state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * torch.randn_like(state_rep_prior_means) * state_sample_std_scalar
-            state_rep[:, i:i + 1, :self.cfg.state_rep_stoch_dim] = state_rep_stoch
+            if given_state_stoch is None:
+                state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * torch.randn_like(state_rep_prior_means) * state_sample_std_scalar
+                state_rep[:, i:i + 1, :self.cfg.state_rep_stoch_dim] = state_rep_stoch
+            else:
+                state_stoch_means[:, i:i + 1] = state_rep_prior_means
 
             state_stoch_hist = state_rep[:, :i + 1, :self.cfg.state_rep_stoch_dim]
             abstract_rep_hist = abstract_rep[:, :i + 1]
@@ -364,13 +384,16 @@ class FullPrototypeModel(nn.Module):
                 segmentation_prior_logits = self.segmentation_prior(decoder_input)
                 segmentation_samples = torch.distributions.Bernoulli(logits=segmentation_prior_logits).sample()
                 segmentation_probs[:, i + 1:i + 2] = torch.sigmoid(segmentation_prior_logits).squeeze(-1)
-                segmentations[:, i + 1:i + 2] = segmentation_samples.squeeze(-1)
+                if given_segmentations is None:
+                    segmentations[:, i + 1:i + 2] = segmentation_samples.squeeze(-1)
 
         return generated_traj, dict(
             abstract_rep=abstract_rep,
             state_rep=state_rep,
             segmentation_samples=segmentations,
             segmentation_probs=segmentation_probs,
+            abstract_stoch_means=abstract_stoch_means,
+            state_stoch_means=state_stoch_means,
         )
 
     def get_dist_gaussian(self, means, stds):
