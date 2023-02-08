@@ -169,14 +169,14 @@ class FullPrototypeModel(nn.Module):
         self.query_mlp_decoder = StandardMLP(input_dim=cfg.query_attention_dim, **cfg.query_mlp_decoder_params, output_dim=cfg.query_dim)
 
         self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.compression_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
-        compression_transformer_encoder_layer = GivenQueryTransformerEncoderLayer(d_query=cfg.query_dim, d_value=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params)
+        compression_transformer_encoder_layer = GivenQueryTransformerEncoderLayer(d_query=cfg.query_dim, d_model=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params)
         self.compression_transformer_encoder = GivenQueryTransformerEncoder(compression_transformer_encoder_layer, **cfg.compression_transformer_params)
         self.compression_transformer_nheads = cfg.compression_transformer_encoder_layer_params['nhead']
         self.abstract_rep_post = StandardMLP(input_dim=cfg.compression_transformer_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
         self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
-        abstract_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
-        self.abstract_rep_transformer_encoder = nn.TransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_params)
+        abstract_rep_transformer_encoder_layer = GivenQueryTransformerEncoderLayer(d_query=cfg.abstract_rep_stoch_dim, d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
+        self.abstract_rep_transformer_encoder = GivenQueryTransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_params)
         self.abstract_rep_transformer_nheads = cfg.abstract_rep_transformer_encoder_layer_params['nhead']
         self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
         self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
@@ -226,8 +226,8 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples, std_scalar=abstract_sample_std_scalar)
 
-        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1)) * segmentation_samples.unsqueeze(-1)
-        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1))
+        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_stoch_samples, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
         abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
         abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
@@ -404,76 +404,27 @@ class FullPrototypeModel(nn.Module):
         seg_eps = torch.stack(seg_eps, dim=1)
         return means + seg_eps * stds * std_scalar
 
-    def get_segmentation_attention_masks(self, delta_t):
-        device = delta_t.device
-        batch_size = delta_t.shape[0]
-        seq_len = delta_t.shape[1]
-        assert seq_len <= self.max_seq_len
-        padding = torch.ones(batch_size, seq_len, device=device)
-        delta_t = torch.cat([padding, delta_t, padding], dim=1)
-        attention_weights = deque([torch.ones(batch_size, seq_len, device=device)])
-
-        forward_elapsed_t = torch.zeros(batch_size, seq_len, device=device)
-        backward_elapsed_t = torch.zeros(batch_size, seq_len, device=device)
-
-        base_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len) + seq_len
-        for i in range(seq_len):
-            forward_indices = base_indices + i + 1
-            backward_indices = base_indices - i
-
-            forward_elapsed_t = forward_elapsed_t + torch.gather(delta_t, 1, forward_indices)
-            backward_elapsed_t = backward_elapsed_t + torch.gather(delta_t, 1, backward_indices)
-
-            attention_weights.append(torch.maximum(1 - forward_elapsed_t, torch.zeros_like(forward_elapsed_t)))
-            attention_weights.appendleft(torch.maximum(1 - backward_elapsed_t, torch.zeros_like(backward_elapsed_t)))
-
-        attention_weights = torch.stack(list(attention_weights), dim=-1)
-        seq_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).unsqueeze(1) + (seq_len - torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)).unsqueeze(-1)
-        attention_weights = torch.gather(attention_weights, 2, seq_indices)
-        segmentation_attention_mask = attention_weights.unsqueeze(1).expand(batch_size, self.compression_transformer_nheads, seq_len, seq_len)
-        segmentation_attention_mask = segmentation_attention_mask.reshape(batch_size * self.compression_transformer_nheads, seq_len, seq_len)
-
-        all_indices = seq_indices - seq_len
-        causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, attention_weights, torch.zeros_like(attention_weights))
-
-        causal_segmentation_attention_mask = causal_attention_weights.unsqueeze(1).expand(batch_size, self.state_rep_transformer_nheads, seq_len, seq_len)
-        causal_segmentation_attention_mask = causal_segmentation_attention_mask.reshape(batch_size * self.state_rep_transformer_nheads, seq_len, seq_len)
-
-        abstract_causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, torch.ones_like(attention_weights), torch.zeros_like(attention_weights))
-
-        abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
-        abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
-        if segmentation_attention_mask.requires_grad:
-            segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
-        if causal_segmentation_attention_mask.requires_grad:
-            causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
-        if abstract_causal_segmentation_attention_mask.requires_grad:
-            abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
-
-        normalized_weights = attention_weights / attention_weights.sum(dim=-1, keepdim=True)
-        return normalized_weights, torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
-
     def get_segmentation_attention_masks_probabilistic(self, segmentation_probs):
         device = segmentation_probs.device
         batch_size = segmentation_probs.shape[0]
         seq_len = segmentation_probs.shape[1]
         assert seq_len <= self.max_seq_len
         padding = torch.ones(batch_size, seq_len, device=device)
-        segmentation_probs = torch.cat([padding, segmentation_probs, padding], dim=1)
+        segmentation_probs_padded = torch.cat([padding, segmentation_probs, padding], dim=1)
         attention_weights = deque([torch.ones(batch_size, seq_len, device=device)])
 
         forward_p_same_segment = torch.ones(batch_size, seq_len, device=device)
         backward_p_same_segment = torch.ones(batch_size, seq_len, device=device)
 
-        no_segmentation_probs = 1 - segmentation_probs
+        no_segmentation_probs_padded = 1 - segmentation_probs_padded
 
         base_indices = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len) + seq_len
         for i in range(seq_len):
             forward_indices = base_indices + i + 1
             backward_indices = base_indices - i
 
-            forward_p_same_segment = forward_p_same_segment * torch.gather(no_segmentation_probs, 1, forward_indices)
-            backward_p_same_segment = backward_p_same_segment * torch.gather(no_segmentation_probs, 1, backward_indices)
+            forward_p_same_segment = forward_p_same_segment * torch.gather(no_segmentation_probs_padded, 1, forward_indices)
+            backward_p_same_segment = backward_p_same_segment * torch.gather(no_segmentation_probs_padded, 1, backward_indices)
 
             attention_weights.append(forward_p_same_segment)
             attention_weights.appendleft(backward_p_same_segment)
@@ -490,7 +441,7 @@ class FullPrototypeModel(nn.Module):
         causal_segmentation_attention_mask = causal_attention_weights.unsqueeze(1).expand(batch_size, self.state_rep_transformer_nheads, seq_len, seq_len)
         causal_segmentation_attention_mask = causal_segmentation_attention_mask.reshape(batch_size * self.state_rep_transformer_nheads, seq_len, seq_len)
 
-        abstract_causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, torch.ones_like(attention_weights), torch.zeros_like(attention_weights))
+        abstract_causal_attention_weights = torch.where(torch.zeros(1, device=device) >= all_indices, torch.cat([segmentation_probs] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len), torch.zeros_like(attention_weights))
 
         abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
         abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
@@ -579,7 +530,7 @@ class GivenQueryTransformerEncoderLayer(nn.Module):
     def __init__(
         self,
         d_query,
-        d_value,
+        d_model,
         batch_first=True,
         nhead=8,
         dim_feedforward=2048,
@@ -591,15 +542,16 @@ class GivenQueryTransformerEncoderLayer(nn.Module):
     ):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_query, nhead, kdim=d_query, vdim=d_value, dropout=dropout, batch_first=batch_first, **factory_kwargs)
+        self.query_map = nn.Linear(d_query, d_model, **factory_kwargs)
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=batch_first, **factory_kwargs)
 
-        self.linear1 = nn.Linear(d_value, dim_feedforward, **factory_kwargs)
+        self.linear1 = nn.Linear(d_model, dim_feedforward, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_value, **factory_kwargs)
+        self.linear2 = nn.Linear(dim_feedforward, d_model, **factory_kwargs)
 
         self.norm_first = norm_first
-        self.norm1 = nn.LayerNorm(d_value, eps=layer_norm_eps, **factory_kwargs)
-        self.norm2 = nn.LayerNorm(d_value, eps=layer_norm_eps, **factory_kwargs)
+        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+        self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
 
@@ -616,6 +568,7 @@ class GivenQueryTransformerEncoderLayer(nn.Module):
 
     # self-attention block
     def _sa_block(self, query, x, attn_mask):
+        query = self.query_map(query)
         x = self.self_attn(query, x, x,
                            attn_mask=attn_mask,
                            need_weights=False)[0]
@@ -725,6 +678,6 @@ def test_full_prototype_generation():
 if __name__ == '__main__':
     # test_temporal_attention()
     # multihead_attention_mask_shape_test()
-    # test_full_prototype_forward()
+    test_full_prototype_forward()
     test_full_prototype_generation()
     pass

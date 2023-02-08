@@ -1,5 +1,6 @@
 log_dir: 'logs/full_prototype'
-name: 'full_prototype_probabilistic_segmentation_with_generation_no_low_level_posterior_info'
+model_load_path: None
+name: 'full_prototype_probabilistic_segmentation_with_generation'
 device: 'cuda:0'
 log_every: 50
 viz_every: 100
