@@ -13,7 +13,7 @@ test_dataset: {dataset_size: 1000, signal_length: 128}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
-temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 100, end_step: 800}
+temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 900}
 time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.20, start_step: 0, end_step: 0}
 
 defaults:

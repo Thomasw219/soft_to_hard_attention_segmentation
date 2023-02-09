@@ -18,6 +18,7 @@ from utils import make_scheduler
 @hydra.main(version_base='1.3', config_path='cfgs', config_name='full_prototype_experiment')
 def eval_full_prototype(cfg):
     np.random.seed(cfg['np_seed'])
+    torch.manual_seed(0)
     train_dataset = Dataset(**cfg['train_dataset'])
     train_dataloader = DataLoader(train_dataset, **cfg['dataloader'])
 
@@ -26,20 +27,26 @@ def eval_full_prototype(cfg):
 
     model = FullPrototypeModel(cfg['model'], data_dim=1, max_seq_len=cfg['train_dataset']['signal_length'])
     model.to(cfg['device'])
+    model.hard_sample()
 
     model.load_state_dict(torch.load(cfg['model_load_path'], map_location=cfg['device']))
 
     batch = next(iter(test_dataloader))
     reconstruction, rec_info = model.forward(batch.to(cfg['device'], dtype=torch.float32))
-    print("Segmentation samples:")
-    print(rec_info["segmentation_samples"][0])
-    print("Abstract stoch state:")
-    print(rec_info["abstract_rep"][0, :, :model.cfg.abstract_rep_stoch_dim])
-    print("Abstract deter state:")
-    print(rec_info["abstract_rep"][0, :, model.cfg.abstract_rep_stoch_dim:model.cfg.abstract_rep_stoch_dim + 4])
-    exit()
+    # print("Segmentation samples:")
+    # print(rec_info["segmentation_samples"][0])
+    # print("Abstract stoch state:")
+    # print(rec_info["abstract_rep"][0, :, :model.cfg.abstract_rep_stoch_dim])
+    # print(rec_info["abstract_rep_prior_stds"][0, :, :model.cfg.abstract_rep_stoch_dim])
 
+    # generation, gen_info = model.generate(batch_size=1, generation_length=model.max_seq_len, given_segmentations=rec_info["segmentation_samples"][:1], given_abstract_stoch=rec_info["abstract_rep"][:1, :, :model.cfg.abstract_rep_stoch_dim])
     generation, gen_info = model.generate(batch_size=1, generation_length=model.max_seq_len)
+    # print("Abstract stoch prior diff:")
+    # print(gen_info["abstract_stoch_means"][0, :, :model.cfg.abstract_rep_stoch_dim] - rec_info["abstract_rep_prior_means"][0, :, :model.cfg.abstract_rep_stoch_dim])
+    print("Generation abstract stochastic state:")
+    print(torch.cat([gen_info["abstract_rep"][0, :, :model.cfg.abstract_rep_stoch_dim], gen_info["segmentation_samples"][0, :].unsqueeze(-1)], dim=-1))
+
+    visualize_reconstruction_generation(reconstruction[0], generation[0], "figures")
 
 def plt_prep(tensor):
     return tensor.detach().cpu().numpy().squeeze()
@@ -116,6 +123,12 @@ def visualize_generations(model, logger, global_step, n_samples=3, prefix='test'
 
     plot_fig.clf()
     segmentation_prob_fig.clf()
+
+def visualize_reconstruction_generation(reconstruction, generation, save_dir):
+    plt.plot(plt_prep(reconstruction), label='reconstruction')
+    plt.plot(plt_prep(generation), label='generation')
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, 'reconstruction_generation.png'))
 
 if __name__ == '__main__':
     eval_full_prototype()

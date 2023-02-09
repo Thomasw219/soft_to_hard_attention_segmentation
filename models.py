@@ -348,10 +348,9 @@ class FullPrototypeModel(nn.Module):
                     abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
                 else:
                     abstract_seg_eps[:, i:i + 1] = (1 - segment) * abstract_seg_eps[:, i - 1:i] + segment * abstract_eps[:, i:i + 1]
-                    abstract_rep_stoch_samples = (1 - segment) * abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar + segment * abstract_rep[:, i - 1:i, :self.cfg.abstract_rep_stoch_dim]
+                    abstract_rep_stoch_samples = (1 - segment) * abstract_rep[:, i - 1:i, :self.cfg.abstract_rep_stoch_dim] + segment * abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
                 abstract_rep[:, i:i + 1, :self.cfg.abstract_rep_stoch_dim] = abstract_rep_stoch_samples
-            else:
-                abstract_stoch_means[:, i:i + 1] = abstract_rep_prior_means
+            abstract_stoch_means[:, i:i + 1] = abstract_rep_prior_means
 
             segmentation_samples = segmentations[:, :i + 1]
             _, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
@@ -367,8 +366,7 @@ class FullPrototypeModel(nn.Module):
             if given_state_stoch is None:
                 state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * torch.randn_like(state_rep_prior_means) * state_sample_std_scalar
                 state_rep[:, i:i + 1, :self.cfg.state_rep_stoch_dim] = state_rep_stoch
-            else:
-                state_stoch_means[:, i:i + 1] = state_rep_prior_means
+            state_stoch_means[:, i:i + 1] = state_rep_prior_means
 
             state_stoch_hist = state_rep[:, :i + 1, :self.cfg.state_rep_stoch_dim]
             abstract_rep_hist = abstract_rep[:, :i + 1]
