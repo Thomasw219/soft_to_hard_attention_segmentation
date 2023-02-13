@@ -39,7 +39,7 @@ def test_full_prototype(cfg):
     global_step = 0
     best_test_loss = np.inf
     for epoch in tqdm(range(cfg['epochs']), desc='Epoch', total=cfg['epochs'], position=0):
-        temp = temp_scheduler.get_value(epoch)
+        temp = temp_scheduler.get_value(global_step)
         model.set_temperature(temp)
         logger.add_scalar('train/temp', temp, global_step)
         time_loss_weight = time_loss_weight_scheduler.get_value(epoch)
@@ -55,6 +55,8 @@ def test_full_prototype(cfg):
             loss, metrics, info = model.get_loss(traj)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['optimizer']['grad_clip'] if 'grad_clip' in cfg['optimizer'] else np.inf)
+            metrics['segmentation_samples_grad_max'] = torch.max(torch.abs(info["segmentation_samples"].grad))
+            metrics['segmentation_samples_grad_avg'] = torch.mean(torch.abs(info["segmentation_samples"].grad))
             optimizer.step()
             metrics['grad_norm'] = grad_norm
             metrics['step_time'] = time() - train_start_time

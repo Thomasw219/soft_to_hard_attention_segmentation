@@ -1,20 +1,21 @@
 log_dir: 'logs/full_prototype'
 model_load_path: None
-name: 'full_prototype_probabilistic_segmentation_with_generation'
+name: 'full_prototype_probabilistic_segmentation_with_generation_temp_scheduler_from_paper'
 device: 'cuda:0'
-log_every: 50
+log_every: 1
 viz_every: 100
 np_seed: 0
 
-epochs: 1000
+epochs: 4000
 
 train_dataset: {dataset_size: 10000, signal_length: 128}
 test_dataset: {dataset_size: 1000, signal_length: 128}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
-temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 900}
-time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.20, start_step: 0, end_step: 0}
+temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 5.0e-5, max_temp: 2.0, min_temp: 0.01}
+# temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 400}
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.30, start_step: 0, end_step: 0}
 
 defaults:
   - model: full_prototype_v1

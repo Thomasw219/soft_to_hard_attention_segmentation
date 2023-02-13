@@ -40,13 +40,14 @@ def eval_full_prototype(cfg):
     # print(rec_info["abstract_rep_prior_stds"][0, :, :model.cfg.abstract_rep_stoch_dim])
 
     # generation, gen_info = model.generate(batch_size=1, generation_length=model.max_seq_len, given_segmentations=rec_info["segmentation_samples"][:1], given_abstract_stoch=rec_info["abstract_rep"][:1, :, :model.cfg.abstract_rep_stoch_dim])
-    generation, gen_info = model.generate(batch_size=1, generation_length=model.max_seq_len)
+    generation, gen_info = model.generate(batch_size=1, generation_length=model.max_seq_len, initial_stoch=rec_info["abstract_rep"][:1, 0, :model.cfg.abstract_rep_stoch_dim])
+    # generation, gen_info = model.generate(batch_size=1, generation_length=model.max_seq_len)
     # print("Abstract stoch prior diff:")
     # print(gen_info["abstract_stoch_means"][0, :, :model.cfg.abstract_rep_stoch_dim] - rec_info["abstract_rep_prior_means"][0, :, :model.cfg.abstract_rep_stoch_dim])
     print("Generation abstract stochastic state:")
     print(torch.cat([gen_info["abstract_rep"][0, :, :model.cfg.abstract_rep_stoch_dim], gen_info["segmentation_samples"][0, :].unsqueeze(-1)], dim=-1))
 
-    visualize_reconstruction_generation(reconstruction[0], generation[0], "figures")
+    visualize_reconstruction_generation(reconstruction[0], rec_info['segmentation_samples'][0], generation[0], gen_info['segmentation_samples'][0], gen_info['segmentation_probs'][0], "figures")
 
 def plt_prep(tensor):
     return tensor.detach().cpu().numpy().squeeze()
@@ -124,10 +125,15 @@ def visualize_generations(model, logger, global_step, n_samples=3, prefix='test'
     plot_fig.clf()
     segmentation_prob_fig.clf()
 
-def visualize_reconstruction_generation(reconstruction, generation, save_dir):
-    plt.plot(plt_prep(reconstruction), label='reconstruction')
-    plt.plot(plt_prep(generation), label='generation')
+def visualize_reconstruction_generation(reconstruction, reconstruction_segmentations, generation, generation_segmentations, generation_segmentation_probs, save_dir):
+    plt.plot(plt_prep(reconstruction), label='reconstruction', c='b', zorder=10)
+    plt.plot(plt_prep(generation), label='generation', c='g', zorder=10)
+    indices = np.arange(reconstruction_segmentations.shape[0])
+    plt.vlines(indices[plt_prep(reconstruction_segmentations) == 1], np.min(plt_prep(reconstruction)), np.max(plt_prep(reconstruction)), zorder=0, color='b', alpha=0.5)
+    plt.vlines(indices[plt_prep(generation_segmentations) == 1], np.min(plt_prep(generation)), np.max(plt_prep(generation)), zorder=0, color='g', alpha=0.5)
     plt.legend()
+    term_prob_ax = plt.twinx()
+    term_prob_ax.plot(plt_prep(generation_segmentation_probs), label='generation_segmentation_probs', c='r', alpha=0.5)
     plt.savefig(os.path.join(save_dir, 'reconstruction_generation.png'))
 
 if __name__ == '__main__':

@@ -41,10 +41,44 @@ class LogarithmicScheduler(SchedulerBase):
         else:
             return self.start_value * (self.end_value / self.start_value) ** ((step - self.start_step) / (self.end_step - self.start_step))
 
+class GumbelSoftmaxScheduler(SchedulerBase):
+    def __init__(self, start_step, N, r, max_temp, min_temp, **kwargs):
+        self.start_step = start_step
+        self.N = N
+        self.r = r
+        self.max_temp = max_temp
+        self.min_temp = min_temp
+
+    def get_value(self, step):
+        if step < self.start_step:
+            return self.max_temp
+        else:
+            return np.maximum(self.max_temp * np.exp(-self.r * np.floor((step - self.start_step) / self.N) * self.N), self.min_temp)
+
 def make_scheduler(cfg):
     if cfg['type'] == 'linear':
         return LinearScheduler(**cfg)
     elif cfg['type'] == 'logarithmic':
         return LogarithmicScheduler(**cfg)
+    elif cfg['type'] == 'gumbel_softmax':
+        return GumbelSoftmaxScheduler(**cfg)
     else:
         raise ValueError(f'Unknown scheduler type: {cfg["type"]}')
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
+    scheduler = make_scheduler({
+        'type': 'gumbel_softmax',
+        'start_step': 0,
+        'N': 1000,
+        'r': 5.0e-5,
+        'max_temp': 2.0,
+        'min_temp': 0.1,
+    })
+
+    x = np.arange(600000)
+    y = np.array([scheduler.get_value(i) for i in x])
+
+    plt.plot(x, y)
+    plt.savefig("figures/scheduler.png")

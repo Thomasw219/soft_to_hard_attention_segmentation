@@ -213,6 +213,8 @@ class FullPrototypeModel(nn.Module):
         # segmentation_samples = torch.sigmoid(segmentation_logits)[..., 0]
         # segmentation_samples = torch.bernoulli(segmentation_samples) + segmentation_samples - segmentation_samples.detach()
         segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
+        if segmentation_samples.requires_grad:
+            segmentation_samples.retain_grad()
         segment_weights, segmentation_attention_mask, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
         query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
@@ -308,7 +310,7 @@ class FullPrototypeModel(nn.Module):
 
         return model_loss, metrics, info
 
-    def generate(self, batch_size, abstract_sample_std_scalar=0, state_sample_std_scalar=0, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None):
+    def generate(self, batch_size, abstract_sample_std_scalar=1, state_sample_std_scalar=1, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None, initial_stoch=None):
         device = self.positional_encoding.device
         if generation_length is None:
             generation_length = self.max_seq_len
@@ -345,7 +347,10 @@ class FullPrototypeModel(nn.Module):
                 segment = segmentations[:, i:i + 1].unsqueeze(-1)
                 if i == 0:
                     abstract_seg_eps[:, i:i + 1] = abstract_eps[:, i:i + 1]
-                    abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
+                    if initial_stoch is None:
+                        abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
+                    else:
+                        abstract_rep_stoch_samples = initial_stoch
                 else:
                     abstract_seg_eps[:, i:i + 1] = (1 - segment) * abstract_seg_eps[:, i - 1:i] + segment * abstract_eps[:, i:i + 1]
                     abstract_rep_stoch_samples = (1 - segment) * abstract_rep[:, i - 1:i, :self.cfg.abstract_rep_stoch_dim] + segment * abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
@@ -467,11 +472,11 @@ class FullPrototypeModel(nn.Module):
         abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
         abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
         if segmentation_attention_mask.requires_grad:
-            segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+            segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
         if causal_segmentation_attention_mask.requires_grad:
-            causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+            causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
         if abstract_causal_segmentation_attention_mask.requires_grad:
-            abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
+            abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
 
         normalized_weights = attention_weights / attention_weights.sum(dim=-1, keepdim=True)
         return normalized_weights, torch.log(segmentation_attention_mask), torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
