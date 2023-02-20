@@ -29,7 +29,8 @@ def test_full_prototype(cfg):
     optimizer = get_optimizer(cfg['optimizer'], model)
     temp_scheduler = make_scheduler(cfg['temp_scheduler'])
     time_loss_weight_scheduler = make_scheduler(cfg['time_loss_weight_scheduler'])
-
+    # lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: temp_scheduler.get_value(step))
+    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1)
     timestring = datetime.now(tz=timezone(timedelta(hours=-5))).strftime("_%m-%d-%Y_%H-%M-%S") # EST, No daylight savings
     logger = SummaryWriter(os.path.join(cfg['log_dir'], cfg['name'] + timestring))
     logger.add_text('config', str(cfg))
@@ -58,7 +59,9 @@ def test_full_prototype(cfg):
             metrics['segmentation_samples_grad_max'] = torch.max(torch.abs(info["segmentation_samples"].grad))
             metrics['segmentation_samples_grad_avg'] = torch.mean(torch.abs(info["segmentation_samples"].grad))
             optimizer.step()
+            lr_scheduler.step()
             metrics['grad_norm'] = grad_norm
+            metrics['lr'] = lr_scheduler.get_last_lr()[0]
             metrics['step_time'] = time() - train_start_time
 
             if global_step % cfg['log_every'] == 0:
@@ -121,11 +124,8 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
 
         # Plot delta_t logit for sequence
         delta_t_logit_ax = delta_t_logit_fig.add_subplot(n_samples, 1, i+1)
-        delta_t_logit_ax.plot(plt_prep(info['segmentation_logits'][i, :, 0]), label='0 logits', c='b')
-        delta_t_logit_ax.plot(plt_prep(info['segmentation_logits'][i, :, 1]), label='1 logits', c='g')
-        prior_logit_ax = delta_t_logit_ax.twinx()
-        prior_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0])), label='prior prob', c='r')
-        prior_logit_ax.set_ylim(0, 1)
+        delta_t_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_post_logits'][i, :, 0])), label='post_prob', c='b')
+        delta_t_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0])), label='prior prob', c='r')
 
         # Plot latent features for sequence
         latent_features_ax = latent_features_fig.add_subplot(n_samples, 1, i+1)
@@ -136,7 +136,6 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
             plot_ax.legend()
             delta_t_ax.legend()
             delta_t_logit_ax.legend()
-            prior_logit_ax.legend()
 
     logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
     logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
