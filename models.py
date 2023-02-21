@@ -235,7 +235,7 @@ class FullPrototypeModel(nn.Module):
         state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
         transformed_state_rep_encodings = self.state_rep_transformer_encoder(state_rep_encodings, mask=causal_segmentation_attention_mask)
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
-        state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples.detach()).unsqueeze(-1), abstract_rep], dim=-1))
+        state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples).unsqueeze(-1), abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
@@ -275,7 +275,7 @@ class FullPrototypeModel(nn.Module):
         # abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
 
         # TODO: Don't include time loss factor into KL loss, keep them factorized
-        abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples.detach())
+        abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
 
         state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
         state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
