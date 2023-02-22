@@ -1,6 +1,6 @@
 log_dir: 'logs/full_prototype'
 model_load_path: None
-name: 'full_prototype_concrete_elbo_detach_less'
+name: 'full_prototype_concrete_elbo_autoregressive_segmentation_post'
 device: 'cuda:0'
 log_every: 1
 viz_every: 100

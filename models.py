@@ -165,6 +165,7 @@ class FullPrototypeModel(nn.Module):
         self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
         segmentation_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params)
         self.segmentation_transformer_encoder = nn.TransformerEncoder(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
+        self.segmentation_gru = nn.GRUCell(cfg.segmentation_transformer_dim + 1, cfg.segmentation_transformer_dim)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=1)
 
         self.query_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.query_mlp_encoder_params, output_dim=cfg.query_attention_dim)
@@ -196,20 +197,35 @@ class FullPrototypeModel(nn.Module):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
         batch_size = traj.shape[0]
         seq_len = traj.shape[1]
+        device = traj.device
         assert seq_len <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         encodings = self.encoder(traj)
         broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:, :traj.shape[1]].expand(batch_size, -1, -1))
 
         segmentation_encodings = self.segmentation_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
-        segmentation_post_logits = self.segmentation_post(transformed_segmentation_encodings)[:, :-1, :]
-        segmentation_samples, y_samples = concrete.sample_binary_concrete(segmentation_post_logits, self.temperature, hard=self.sample)
+        segmentation_post_logits = []
+        segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
+        y_samples = []
+        gru_hidden = torch.zeros(batch_size, self.cfg.segmentation_transformer_dim, device=device, dtype=torch.float32)
+        for i in range(seq_len - 1):
+            gru_hidden = self.segmentation_gru(torch.cat([segmentation_samples[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
+            segmentation_post_logit = self.segmentation_post(gru_hidden)
+            segmentation_sample, y_sample = concrete.sample_binary_concrete(segmentation_post_logit, self.temperature, hard=self.sample)
+            segmentation_post_logits.append(segmentation_post_logit)
+            segmentation_samples.append(segmentation_sample)
+            y_samples.append(y_sample)
+
+        segmentation_post_logits = torch.stack(segmentation_post_logits, dim=1)
+        segmentation_samples = torch.stack(segmentation_samples, dim=1)
+        y_samples = torch.stack(y_samples, dim=1)
+
         segmentation_samples = segmentation_samples.squeeze(-1)
         if segmentation_samples.requires_grad:
             segmentation_samples.register_hook(lambda grad: self.cfg.time_grad_scalar * grad)
         # segmentation_samples = torch.sigmoid(segmentation_logits)[..., 0]
         # segmentation_samples = torch.bernoulli(segmentation_samples) + segmentation_samples - segmentation_samples.detach()
-        segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
+        # segmentation_samples = torch.cat([torch.ones_like(segmentation_samples[:, :1]), segmentation_samples], dim=1)
         if segmentation_samples.requires_grad:
             segmentation_samples.retain_grad()
         segment_weights, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
