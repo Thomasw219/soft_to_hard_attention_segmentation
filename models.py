@@ -205,13 +205,15 @@ class FullPrototypeModel(nn.Module):
         segmentation_encodings = self.segmentation_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
         segmentation_post_logits = []
+        segmentation_post_probs = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         y_samples = []
         gru_hidden = torch.zeros(batch_size, self.cfg.segmentation_transformer_dim, device=device, dtype=torch.float32)
         for i in range(seq_len - 1):
-            gru_hidden = self.segmentation_gru(torch.cat([segmentation_samples[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
+            gru_hidden = self.segmentation_gru(torch.cat([segmentation_post_probs[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
             segmentation_post_logit = self.segmentation_post(gru_hidden)
             segmentation_sample, y_sample = concrete.sample_binary_concrete(segmentation_post_logit, self.temperature, hard=self.sample)
+            segmentation_post_probs.append(torch.sigmoid(segmentation_post_logit))
             segmentation_post_logits.append(segmentation_post_logit)
             segmentation_samples.append(segmentation_sample)
             y_samples.append(y_sample)
