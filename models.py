@@ -294,6 +294,7 @@ class FullPrototypeModel(nn.Module):
 
         # TODO: Don't include time loss factor into KL loss, keep them factorized
         abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
+        # abstract_rep_kl_loss = torch.mean(torch.sum((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples, dim=1) / torch.sum(segmentation_samples, dim=1))
 
         state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
         state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
@@ -484,12 +485,10 @@ class FullPrototypeModel(nn.Module):
 
         abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
         abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
-        # if causal_segmentation_attention_mask.requires_grad:
-        #     causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
-        # if abstract_causal_segmentation_attention_mask.requires_grad:
-        #     abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
-        causal_segmentation_attention_mask = causal_segmentation_attention_mask.detach()
-        abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.detach()
+        if causal_segmentation_attention_mask.requires_grad:
+            causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
+        if abstract_causal_segmentation_attention_mask.requires_grad:
+            abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
 
         normalized_weights = attention_weights / attention_weights.sum(dim=-1, keepdim=True)
         return normalized_weights, None, torch.log(causal_segmentation_attention_mask), torch.log(abstract_causal_segmentation_attention_mask)
