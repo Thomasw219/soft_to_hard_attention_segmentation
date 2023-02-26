@@ -1,6 +1,8 @@
+import numpy as np
+
 from torch.nn.modules.linear import Linear
-from modules import *
-from utils import *
+from love.modules import *
+from love.utils import gumbel_sampling, concat, log_density_concrete
 
 
 class HierarchicalStateSpaceModel(nn.Module):
@@ -39,9 +41,9 @@ class HierarchicalStateSpaceModel(nn.Module):
         #################################
         # observation encoder / decoder #
         #################################
-        self.enc_obs = Encoder(feat_size=self.feat_size)
-        self.dec_obs = Decoder(input_size=self.obs_feat_size,
-                               feat_size=self.feat_size)
+        self.enc_obs = Encoder1D(feat_size=1, output_size=self.obs_feat_size)
+        self.dec_obs = Decoder1D(input_size=self.obs_feat_size,
+                               feat_size=1)
 
         #####################
         # boundary detector #
@@ -161,7 +163,7 @@ class HierarchicalStateSpaceModel(nn.Module):
 
         # for each step
         new_log_alpha_list = []
-        for t in range(seq_len):
+        for t in range(seq_len - 1):
             ##########################
             # (0) get length / count #
             ##########################
@@ -321,7 +323,7 @@ class HierarchicalStateSpaceModel(nn.Module):
         # decode all together
         obs_rec_list = torch.stack(obs_rec_list, dim=1)
         obs_rec_list = self.dec_obs(obs_rec_list.view(num_samples * seq_size, -1))
-        obs_rec_list = obs_rec_list.view(num_samples, seq_size, *obs_rec_list.size()[-3:])
+        obs_rec_list = obs_rec_list.view(num_samples, seq_size, *obs_rec_list.size()[-1:])
 
         # stack results
         prior_boundary_log_alpha_list = torch.stack(prior_boundary_log_alpha_list, dim=1)
@@ -332,7 +334,7 @@ class HierarchicalStateSpaceModel(nn.Module):
         post_boundary_sample_logit_list = post_boundary_sample_logit_list[:, (init_size + 1):(init_size + 1 + seq_size)]
 
         # fix prior by constraints
-        prior_boundary_log_alpha_list = self.regularize_prior_boundary(prior_boundary_log_alpha_list,
+        prior_boundary_log_alpha_list = self.regularize_prior_boundary(prior_boundary_log_alpha_list[:, :-1],
                                                                        boundary_data_list)
 
         # compute log-density
@@ -521,7 +523,7 @@ class HierarchicalStateSpaceModel(nn.Module):
                 abs_belief = self.init_abs_belief(abs_post_fwd)
             else:
                 abs_belief = read_data * self.update_abs_belief(abs_state, abs_belief) + copy_data * abs_belief
-            
+
             p = self.prior_abs_state(abs_belief).rsample()
             sample = self.z_embedding(p)
             abs_state = read_data * sample + copy_data * abs_state
@@ -663,6 +665,87 @@ class EnvModel(nn.Module):
                 'train_loss': obs_cost.mean() + kl_abs_state_list.mean() + kl_obs_state_list.mean() + kl_mask_list.mean() + self.coding_len_coeff * encoding_length,
                 'option_list': selected_option,
                 }
+
+    def get_loss(self, obs_data_list, seq_size, init_size, obs_std=1.0):
+        ############################
+        # (1) run over state model #
+        ############################
+        [obs_rec_list,
+         prior_boundary_log_density_list,
+         post_boundary_log_density_list,
+         prior_abs_state_list,
+         post_abs_state_list,
+         prior_obs_state_list,
+         post_obs_state_list,
+         boundary_data_list,
+         prior_boundary_list,
+         post_boundary_list,
+         selected_option,
+         onehot_z_list] = self.state_model(obs_data_list, seq_size, init_size)
+
+        ########################################################
+        # (2) compute obs_cost (sum over spatial and channels) #
+        ########################################################
+        obs_target_list = obs_data_list[:, init_size:]
+        obs_cost = - Normal(obs_rec_list, obs_std).log_prob(obs_target_list)
+        obs_cost = obs_cost.sum(dim=[2])
+
+        #######################
+        # (3) compute kl_cost #
+        #######################
+        # compute kl related to states
+        kl_abs_state_list = []
+        kl_obs_state_list = []
+        for t in range(seq_size):
+            # read flag
+            read_data = boundary_data_list[:, t].detach()
+
+            # kl divergences (sum over dimension)
+            # kl_abs_state = kl_divergence(post_abs_state_list[t], prior_abs_state_list[t]) * read_data
+            kl_abs_state = kl_categorical(post_abs_state_list[t], prior_abs_state_list[t], mask_a=not self.use_abs_pos_kl) * read_data
+            kl_obs_state = kl_divergence(post_obs_state_list[t], prior_obs_state_list[t])
+            # kl_abs_state_list.append(kl_abs_state.sum(-1))
+            kl_abs_state_list.append(kl_abs_state)
+            kl_obs_state_list.append(kl_obs_state.sum(-1))
+        kl_abs_state_list = torch.stack(kl_abs_state_list, dim=1)
+        kl_obs_state_list = torch.stack(kl_obs_state_list, dim=1)
+
+        # compute kl related to boundary
+        kl_mask_list = (post_boundary_log_density_list - prior_boundary_log_density_list)
+
+        ###############################
+        # (4) compute encoding length #
+        ###############################
+        marginal, all_codes, all_boundaries = self.state_model.abs_marginal(obs_data_list, seq_size, init_size)
+        all_codes = torch.cat(all_codes, dim=0)
+        all_boundaries = torch.cat(all_boundaries, dim=0)
+        encoding_length = self.state_model.encoding_cost(marginal, onehot_z_list, boundary_data_list.squeeze(-1))
+
+        loss = obs_cost.mean() + kl_abs_state_list.mean() + kl_obs_state_list.mean() + kl_mask_list.mean() + self.coding_len_coeff * encoding_length
+
+        info = {'reconstructed_traj': obs_rec_list,
+            'ground_truth_traj': obs_data_list,
+            'mask_data': boundary_data_list,
+            'encoding_length': encoding_length,
+            'marginal': marginal.detach().cpu().numpy(),
+            'option_list': selected_option,
+            'p_mask': prior_boundary_list.mean,
+            'q_mask': post_boundary_list.mean,
+        }
+
+        metrics = {
+            'loss': loss.item(),
+            'obs_cost': obs_cost.mean().item(),
+            'kl_abs_state': kl_abs_state_list.mean().item(),
+            'kl_obs_state': kl_obs_state_list.mean().item(),
+            'kl_mask': kl_mask_list.mean().item(),
+            'p_ent': prior_boundary_list.entropy().mean().item(),
+            'q_ent': post_boundary_list.entropy().mean().item(),
+            'beta': self.state_model.mask_beta,
+        }
+
+        # return
+        return loss, metrics, info
 
     def full_generation(self, init_obs_list, seq_size):
         return self.state_model.full_generation(init_obs_list, seq_size)

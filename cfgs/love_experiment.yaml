@@ -1,0 +1,19 @@
+log_dir: 'logs/love'
+model_load_path: None
+name: 'love'
+device: 'cuda:0'
+log_every: 1
+viz_every: 100
+np_seed: 0
+
+epochs: 4000
+
+train_dataset: {dataset_size: 10000, signal_length: 128}
+test_dataset: {dataset_size: 1000, signal_length: 128}
+
+dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
+model: {belief_size: 4, state_size: 16, num_layers: 1, max_seg_len: 128, max_seg_num: 128, use_abs_pos_kl: True, coding_len_coeff: 1.0}
+
+defaults:
+  - optimizer: default_optimizer
+  - model: love

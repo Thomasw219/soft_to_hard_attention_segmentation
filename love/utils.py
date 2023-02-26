@@ -9,12 +9,6 @@ from tqdm import trange
 import wandb
 import os
 import pickle
-from grid_world import grid
-
-FONT = ImageFont.truetype(
-    os.path.join(os.path.dirname(__file__), "asset/fonts/arial.ttf"), 30
-)
-
 
 def contains_nan(tensor):
     is_nan = torch.isnan(tensor)
