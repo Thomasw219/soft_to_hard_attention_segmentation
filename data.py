@@ -79,7 +79,7 @@ class RandomSizePiecewiseSine(PiecewiseSineBase):
             l = np.minimum(sine_length, self.signal_length - idx)
             c = np.random.randint(0, 2)
             if c == 0:
-                signal[idx:idx+l] = np.sin(np.linspace(0, 2 * np.pi, sine_length))[:l]
+                signal[idx:idx+l] = np.sin(np.linspace(0, 2 * np.pi, sine_length + 1))[:l]
             elif c == 1:
                 signal[idx:idx+l] = 0
             idx += l
@@ -97,10 +97,11 @@ class SinusoidAndRandom(PiecewiseSineBase):
         signal = np.empty(self.signal_length)
         idx = 0
         while idx < self.signal_length:
-            l = np.minimum(np.random.randint(25, 40), self.signal_length - idx)
+            s_l = np.random.randint(25, 40)
+            l = np.minimum(s_l, self.signal_length - idx)
             c = np.random.randint(0, 3)
             if c == 0:
-                signal[idx:idx+l] = np.random.uniform(-1, 1) * np.sin(np.linspace(0, np.random.choice([0, 1, 2, 3, 4]) * np.pi, l) + np.random.choice([0, np.pi]))[:l]
+                signal[idx:idx+l] = np.random.uniform(-1, 1) * np.sin(np.linspace(0, np.random.choice([0, 1, 2, 3, 4]) * np.pi, s_l + 1) + np.random.choice([0, np.pi]))[:l]
             elif c == 1:
                 signal[idx:idx+l] = 0
             elif c == 2:
@@ -123,10 +124,11 @@ class ComplicatedSinusoid(PiecewiseSineBase):
         signal = np.empty(self.signal_length)
         idx = 0
         while idx < self.signal_length:
-            l = np.minimum(np.random.randint(25, 40), self.signal_length - idx)
+            s_l = np.random.randint(25, 40)
+            l = np.minimum(s_l, self.signal_length - idx)
             c = np.random.randint(0, 2)
             if c == 0:
-                signal[idx:idx+l] = np.random.uniform(-1, 1) * np.sin(np.linspace(0, np.random.choice([0, 1, 2, 3, 4]) * np.pi, l) + np.random.choice([0, np.pi]))[:l]
+                signal[idx:idx+l] = np.random.uniform(-1, 1) * np.sin(np.linspace(0, np.random.choice([0, 1, 2, 3, 4]) * np.pi, s_l + 1) + np.random.choice([0, np.pi]))[:l]
             elif c == 1:
                 signal[idx:idx+l] = 0
             idx += l
@@ -143,6 +145,29 @@ class PiecewiseLinear(PiecewiseSineBase):
         self.probs = [0.2, 0.2, 0.2, 0.2, 0.1, 0.1]
         self.values = [1.0, 0.6, 0.2, -0.2, -0.6, -1.0]
         self.lengths = [3, 8, 20, 3, 6, 30]
+
+    def __getitem__(self, index):
+        signal = np.empty(self.signal_length)
+        idx = 0
+        while idx < self.signal_length:
+            lin_idx = np.random.choice(self.indices, p=self.probs)
+            val = self.values[lin_idx]
+            l = np.minimum(self.lengths[lin_idx], self.signal_length - idx)
+            signal[idx:idx+l] = val
+            idx += l
+        return signal.reshape((self.signal_length, 1))
+
+class SimplePiecewiseLinear(PiecewiseSineBase):
+    def __init__(
+        self,
+        signal_length=128,
+        dataset_size=1000,
+    ):
+        super().__init__(signal_length=signal_length, dataset_size=dataset_size)
+        self.indices = [0, 1, 2]
+        self.probs = [0.5, 0.3, 0.2]
+        self.values = [1.0, 0.0, -1.0]
+        self.lengths = [3, 3, 3]
 
     def __getitem__(self, index):
         signal = np.empty(self.signal_length)
