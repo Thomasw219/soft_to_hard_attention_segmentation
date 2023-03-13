@@ -16,6 +16,9 @@ positional_encoding_type: 'learned'
 positional_encoding_dim: 64
 positional_encoding_dropout: 0.0
 
+# null for learned segmentations
+fix_segmentation_period: null
+
 segmentation_transformer_dim: 64
 segmentation_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 segmentation_transformer_encoder_layer_params: {nhead: 8, dim_feedforward: 256, batch_first: True, dropout: 0.1}

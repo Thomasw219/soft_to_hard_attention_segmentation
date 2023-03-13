@@ -215,7 +215,13 @@ class FullPrototypeModel(nn.Module):
             segmentation_sample, y_sample = concrete.sample_binary_concrete(segmentation_post_logit, self.temperature, hard=self.sample)
             segmentation_post_probs.append(torch.sigmoid(segmentation_post_logit))
             segmentation_post_logits.append(segmentation_post_logit)
-            segmentation_samples.append(segmentation_sample)
+            if self.cfg['fix_segmentation_period'] is None:
+                segmentation_samples.append(segmentation_sample)
+            else:
+                if i % self.cfg['fix_segmentation_period'] == 0:
+                    segmentation_samples.append(torch.ones_like(segmentation_sample))
+                else:
+                    segmentation_samples.append(torch.zeros_like(segmentation_sample))
             y_samples.append(y_sample)
 
         segmentation_post_logits = torch.stack(segmentation_post_logits, dim=1)
@@ -365,7 +371,6 @@ class FullPrototypeModel(nn.Module):
                     if initial_stoch is None:
                         abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
                     else:
-                        print("GIVEN INITIAL STOCH")
                         abstract_rep_stoch_samples = initial_stoch
                 else:
                     abstract_seg_eps[:, i:i + 1] = (1 - segment) * abstract_seg_eps[:, i - 1:i] + segment * abstract_eps[:, i:i + 1]
@@ -401,10 +406,16 @@ class FullPrototypeModel(nn.Module):
 
             if i < generation_length - 1:
                 segmentation_prior_logits = self.segmentation_prior(decoder_input)
-                segmentation_samples = torch.distributions.Bernoulli(logits=segmentation_prior_logits).sample()
+                segmentation_samples = torch.distributions.Bernoulli(logits=segmentation_prior_logits).sample().squeeze(-1)
                 segmentation_probs[:, i + 1:i + 2] = torch.sigmoid(segmentation_prior_logits).squeeze(-1)
                 if given_segmentations is None:
-                    segmentations[:, i + 1:i + 2] = segmentation_samples.squeeze(-1)
+                    if self.cfg['fix_segmentation_period'] is None:
+                        segmentations[:, i + 1:i + 2] = segmentation_samples
+                    else:
+                        if (i + 1) % self.cfg['fix_segmentation_period'] == 0:
+                            segmentations[:, i + 1:i + 2] = torch.ones_like(segmentation_samples)
+                        else:
+                            segmentations[:, i + 1:i + 2] = torch.zeros_like(segmentation_samples)
 
         return generated_traj, dict(
             abstract_rep=abstract_rep,

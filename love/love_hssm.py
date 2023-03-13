@@ -202,8 +202,7 @@ class HierarchicalStateSpaceModel(nn.Module):
         #######################
         # observation encoder #
         #######################
-        enc_obs_list = self.enc_obs(obs_data_list.view(-1, *obs_data_list.size()[2:]))
-        enc_obs_list = enc_obs_list.view(num_samples, full_seq_size, -1)  # [B, S, D]
+        enc_obs_list = self.enc_obs(obs_data_list)
 
         ######################
         # boundary sampling ##
@@ -721,7 +720,8 @@ class EnvModel(nn.Module):
         all_boundaries = torch.cat(all_boundaries, dim=0)
         encoding_length = self.state_model.encoding_cost(marginal, onehot_z_list, boundary_data_list.squeeze(-1))
 
-        loss = obs_cost.mean() + kl_abs_state_list.mean() + kl_obs_state_list.mean() + kl_mask_list.mean() + self.coding_len_coeff * encoding_length
+        code_len_loss = encoding_length
+        loss = obs_cost.mean() + 0 * kl_abs_state_list.mean() + 0 * kl_obs_state_list.mean() + 0 * kl_mask_list.mean() + self.coding_len_coeff * code_len_loss
 
         info = {'reconstructed_traj': obs_rec_list,
             'ground_truth_traj': obs_data_list,
@@ -734,6 +734,7 @@ class EnvModel(nn.Module):
         }
 
         metrics = {
+            'code_len_loss': code_len_loss.item(),
             'loss': loss.item(),
             'obs_cost': obs_cost.mean().item(),
             'kl_abs_state': kl_abs_state_list.mean().item(),

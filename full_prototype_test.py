@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from data import RandomSizePiecewiseSine as Dataset
+from data import ComplicatedSinusoid as Dataset
 from models import FullPrototypeModel
 from utils import make_scheduler
 
@@ -56,8 +56,9 @@ def test_full_prototype(cfg):
             loss, metrics, info = model.get_loss(traj)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['optimizer']['grad_clip'] if 'grad_clip' in cfg['optimizer'] else np.inf)
-            metrics['segmentation_samples_grad_max'] = torch.max(torch.abs(info["segmentation_samples"].grad))
-            metrics['segmentation_samples_grad_avg'] = torch.mean(torch.abs(info["segmentation_samples"].grad))
+            if info["segmentation_samples"].grad is not None:
+                metrics['segmentation_samples_grad_max'] = torch.max(torch.abs(info["segmentation_samples"].grad))
+                metrics['segmentation_samples_grad_avg'] = torch.mean(torch.abs(info["segmentation_samples"].grad))
             optimizer.step()
             lr_scheduler.step()
             metrics['grad_norm'] = grad_norm

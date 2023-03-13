@@ -4,4 +4,4 @@ num_layers: 1
 max_seg_len: 128
 max_seg_num: 128
 use_abs_pos_kl: True
-coding_len_coeff: 1.0
+coding_len_coeff: 0.0
