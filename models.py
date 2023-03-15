@@ -209,7 +209,7 @@ class FullPrototypeModel(nn.Module):
         segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         y_samples = []
         gru_hidden = torch.zeros(batch_size, self.cfg.segmentation_transformer_dim, device=device, dtype=torch.float32)
-        for i in range(seq_len - 1):
+        for i in range(1, seq_len):
             gru_hidden = self.segmentation_gru(torch.cat([segmentation_post_probs[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
             segmentation_post_logit = self.segmentation_post(gru_hidden)
             segmentation_sample, y_sample = concrete.sample_binary_concrete(segmentation_post_logit, self.temperature, hard=self.sample)
