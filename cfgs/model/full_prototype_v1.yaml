@@ -21,7 +21,8 @@ fix_segmentation_period: null
 
 segmentation_transformer_dim: 64
 segmentation_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
-segmentation_transformer_encoder_layer_params: {nhead: 8, dim_feedforward: 256, batch_first: True, dropout: 0.1}
+# segmentation_transformer_encoder_layer_params: {nhead: 8, dim_feedforward: 256, batch_first: True, dropout: 0.1}
+segmentation_transformer_encoder_layer_params: {nhead: 8, dim_feedforward: 256, dropout: 0.1} # FOR RPR TRANSFORMER
 segmentation_transformer_encoder_params: {num_layers: 4}
 segmentation_post_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 

@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 import concrete
+import rpr
 
 class PrototypeModel(nn.Module):
     def __init__(
@@ -162,9 +163,9 @@ class FullPrototypeModel(nn.Module):
             self.positional_encoding = nn.Parameter(get_sinusoidal_positional_encoding(cfg.positional_encoding_dim, max_seq_len), requires_grad=False)
         self.positional_encoding_dropout = nn.Dropout(p=cfg.positional_encoding_dropout)
 
-        self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
-        segmentation_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params)
-        self.segmentation_transformer_encoder = nn.TransformerEncoder(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
+        self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
+        segmentation_transformer_encoder_layer = rpr.TransformerEncoderLayerRPR(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params, er_len=max_seq_len)
+        self.segmentation_transformer_encoder = rpr.TransformerEncoderRPR(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
         self.segmentation_gru = nn.GRUCell(cfg.segmentation_transformer_dim + 1, cfg.segmentation_transformer_dim)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=1)
 
@@ -202,8 +203,8 @@ class FullPrototypeModel(nn.Module):
         encodings = self.encoder(traj)
         broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:, :traj.shape[1]].expand(batch_size, -1, -1))
 
-        segmentation_encodings = self.segmentation_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
-        transformed_segmentation_encodings = self.segmentation_transformer_encoder(segmentation_encodings)
+        segmentation_encodings = self.segmentation_mlp_encoder(encodings)
+        transformed_segmentation_encodings = self.segmentation_transformer_encoder(torch.transpose(segmentation_encodings, 0, 1)).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
         segmentation_post_logits = []
         segmentation_post_probs = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
