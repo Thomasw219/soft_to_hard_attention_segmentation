@@ -181,18 +181,18 @@ class FullPrototypeModel(nn.Module):
         self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
 
         self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + self.abstract_rep_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim * 2)
-        self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
-        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim  + self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
-        state_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params)
-        self.state_rep_transformer_encoder = nn.TransformerEncoder(state_rep_transformer_encoder_layer, **cfg.state_rep_transformer_params)
+        self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim  + self.abstract_rep_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        state_rep_transformer_encoder_layer = rpr.TransformerEncoderLayerRPR(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params, er_len=max_seq_len)
+        self.state_rep_transformer_encoder = rpr.TransformerEncoderRPR(state_rep_transformer_encoder_layer, **cfg.state_rep_transformer_params)
         self.state_rep_transformer_nheads = cfg.state_rep_transformer_encoder_layer_params['nhead']
         self.state_rep_mlp_decoder = StandardMLP(input_dim=cfg.state_rep_transformer_dim, **cfg.state_rep_mlp_decoder_params, output_dim=cfg.state_rep_deter_dim)
         self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim + self.abstract_rep_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
 
-        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.segmentation_prior_params, output_dim=1)
+        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.segmentation_prior_params, output_dim=1)
 
-        self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + cfg.positional_encoding_dim, **cfg.decoder_params, output_dim=data_dim)
+        self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.decoder_params, output_dim=data_dim)
 
     def forward(self, traj, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
@@ -257,15 +257,15 @@ class FullPrototypeModel(nn.Module):
         state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds, std_scalar=state_sample_std_scalar)
 
-        state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, broadcast_positional_encoding], dim=-1))
-        transformed_state_rep_encodings = self.state_rep_transformer_encoder(state_rep_encodings, mask=causal_segmentation_attention_mask)
+        state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep], dim=-1))
+        transformed_state_rep_encodings = self.state_rep_transformer_encoder(torch.transpose(state_rep_encodings, 0, 1), mask=causal_segmentation_attention_mask).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
         state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
         state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples).unsqueeze(-1), abstract_rep], dim=-1))
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
         # state_rep = torch.zeros_like(state_rep)
-        decoder_input = torch.cat([state_rep, abstract_rep, broadcast_positional_encoding], dim=-1)
+        decoder_input = torch.cat([state_rep, abstract_rep], dim=-1)
         segmentation_prior_logits = self.segmentation_prior(decoder_input)[:, :-1]
         reconstructed_traj = self.decoder(decoder_input)
 
@@ -397,12 +397,12 @@ class FullPrototypeModel(nn.Module):
 
             state_stoch_hist = state_rep[:, :i + 1, :self.cfg.state_rep_stoch_dim]
             abstract_rep_hist = abstract_rep[:, :i + 1]
-            state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_stoch_hist, abstract_rep_hist, broadcast_positional_encoding[:, :i + 1]], dim=-1))
-            transformed_state_rep_encodings = self.state_rep_transformer_encoder(state_rep_encodings, mask=causal_segmentation_attention_mask)
+            state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_stoch_hist, abstract_rep_hist], dim=-1))
+            transformed_state_rep_encodings = self.state_rep_transformer_encoder(torch.transpose(state_rep_encodings, 0, 1), mask=causal_segmentation_attention_mask).transpose(0, 1)
             state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
             state_rep[:, i:i + 1, -self.cfg.state_rep_deter_dim:] = state_rep_deter[:, -1:]
 
-            decoder_input = torch.cat([state_rep[:, i:i + 1], abstract_rep[:, i:i + 1], broadcast_positional_encoding[:, i:i + 1]], dim=-1)
+            decoder_input = torch.cat([state_rep[:, i:i + 1], abstract_rep[:, i:i + 1]], dim=-1)
             generated_traj[:, i:i + 1] = self.decoder(decoder_input)
 
             if i < generation_length - 1:

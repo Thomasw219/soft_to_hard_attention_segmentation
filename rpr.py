@@ -404,7 +404,8 @@ def multi_head_attention_forward_rpr(query,                       # type: Tensor
         attn_output_weights += srel
 
     if attn_mask is not None:
-        attn_mask = attn_mask.unsqueeze(0)
+        if len(attn_mask.shape) == 2:
+            attn_mask = attn_mask.unsqueeze(0)
         attn_output_weights += attn_mask
 
     if key_padding_mask is not None:
