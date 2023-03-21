@@ -1,6 +1,7 @@
 # Normal stuff
 numpy==1.22.2
 
+hydra-core==1.3.1
 torch==1.13.0
 
 matplotlib==3.4

@@ -4,4 +4,4 @@ docker run --name segmentation_learning_env_$1 \
     --gpus all \
     --mount type=bind,source="$(pwd)",target=/root/src \
     --dns 8.8.8.8 \
-    thomasw219/lambda-mujoco-skill-learning:latest
+    thomasw219/segmentation_learning:latest
