@@ -180,6 +180,24 @@ class SimplePiecewiseLinear(PiecewiseSineBase):
             idx += l
         return signal.reshape((self.signal_length, 1))
 
+class Maze2DDataset:
+    def __init__(
+            self,
+            signal_length=128,
+            data_path='data/raw/maze2d-medium-v1.npy',
+    ):
+        self.signal_length = signal_length
+        self.episodes = np.load(data_path, allow_pickle=True)
+        self.n_episodes = len(self.episodes)
+
+    def __getitem__(self, index):
+        ep = self.episodes[index]
+        start_index = np.random.randint(0, ep['observations'].shape[0] - self.signal_length)
+        return ep['observations'][start_index:start_index+self.signal_length]#, ep['actions'][start_index:start_index+self.signal_length]
+
+    def __len__(self):
+        return self.n_episodes
+
 def test_fixed_size_piecewise_sine():
     dataset = FixedSizePiecewiseSine()
 
@@ -194,5 +212,18 @@ def test_fixed_size_piecewise_sine():
     # print(batch.shape)
     # print(batch[0, :, 0])
 
+def test_maze2d_dataset():
+    dataset = Maze2DDataset()
+
+    from torch.utils.data import DataLoader
+    from time import time
+    np.random.seed(0)
+    t = time()
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=0)
+    obs = next(iter(dataloader))
+    print(time() - t)
+    print(obs)
+
 if __name__ == '__main__':
-    test_fixed_size_piecewise_sine()
+    # test_fixed_size_piecewise_sine()
+    test_maze2d_dataset()

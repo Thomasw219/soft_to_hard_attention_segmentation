@@ -2,3 +2,5 @@ logs/*
 outputs/*
 figures/*
 *.pyc
+*.npy
+

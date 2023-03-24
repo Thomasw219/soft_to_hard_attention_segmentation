@@ -6,16 +6,18 @@ import hydra
 from omegaconf import DictConfig
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+import matplotlib.cm as cm
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from data import ComplicatedSinusoid as Dataset
+from data import Maze2DDataset as Dataset
 from models import FullPrototypeModel
 from utils import make_scheduler
 
-@hydra.main(version_base='1.3', config_path='cfgs', config_name='full_prototype_experiment')
+@hydra.main(version_base='1.3', config_path='cfgs', config_name='maze_2d_experiment')
 def test_full_prototype(cfg):
     np.random.seed(cfg['np_seed'])
     train_dataset = Dataset(**cfg['train_dataset'])
@@ -24,7 +26,7 @@ def test_full_prototype(cfg):
     test_dataset = Dataset(**cfg['test_dataset'])
     test_dataloader = DataLoader(test_dataset, **cfg['dataloader'])
 
-    model = FullPrototypeModel(cfg['model'], data_dim=1, max_seq_len=cfg['train_dataset']['signal_length'])
+    model = FullPrototypeModel(cfg['model'], data_dim=4, max_seq_len=cfg['train_dataset']['signal_length'])
     model.to(cfg['device'])
 
     if cfg['model_load_path'] is not None:
@@ -101,8 +103,9 @@ def test_full_prototype(cfg):
                 best_test_loss = metrics['test/loss']
                 torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_model.pt'))
 
-            visualize(info, logger, global_step, prefix='test')
-            visualize_generations(model, logger, global_step, prefix='test')
+            if epoch % 5 == 0:
+                visualize(info, logger, global_step, prefix='test')
+                # visualize_generations(model, logger, global_step, prefix='test')
 
 def get_optimizer(cfg, model):
     if cfg['type'] == 'adam':
@@ -114,6 +117,11 @@ def plt_prep(tensor):
     return tensor.detach().cpu().numpy().squeeze()
 
 def visualize(info, logger, global_step, n_samples=3, prefix='train'):
+    sequence_length = info['ground_truth_traj'].shape[1]
+    norm = mpl.colors.Normalize(vmin=1, vmax=sequence_length)
+    colors = cm.winter(norm(np.array([k for k in range(1, sequence_length + 1)])))
+    colors_gt = cm.autumn(norm(np.array([k for k in range(1, sequence_length + 1)])))
+
     plot_fig = plt.figure(0)
     delta_t_fig = plt.figure(1)
     delta_t_logit_fig = plt.figure(2)
@@ -121,17 +129,21 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     for i in range(n_samples):
         # Plot ground truth and reconstruction for n_samples
         plot_ax = plot_fig.add_subplot(n_samples, 1, i+1)
-        gt_traj = plt_prep(info['ground_truth_traj'][i])
-        recon_traj = plt_prep(info['reconstructed_traj'][i])
-        plot_ax.plot(gt_traj, label='ground truth', c='b')
-        plot_ax.plot(recon_traj, label='reconstruction', c='g')
-        plot_ax.set_ylim(np.min(np.concatenate([-1 * np.ones_like(gt_traj), gt_traj, recon_traj])),
-                         np.max(np.concatenate([np.ones_like(gt_traj), gt_traj, recon_traj])))
+        gt_traj_x = plt_prep(info['ground_truth_traj'][i, :, 0])
+        gt_traj_y = plt_prep(info['ground_truth_traj'][i, :, 1])
+        recon_traj_x = plt_prep(info['reconstructed_traj'][i, :, 0])
+        recon_traj_y = plt_prep(info['reconstructed_traj'][i, :, 1])
+        segmentations = plt_prep(info['segmentation_samples'][i]) > 0.5
+        for t in range(sequence_length - 1):
+            plot_ax.plot(gt_traj_x[t:t + 2], gt_traj_y[t:t + 2], c=colors_gt[t])
+            plot_ax.plot(recon_traj_x[t:t + 2], recon_traj_y[t:t + 2], c=colors[t])
+            if segmentations[t]:
+                plot_ax.scatter(gt_traj_x[t], gt_traj_y[t], c='k', s=10)
         segmentations = plt_prep(info['segmentation_samples'][i])
         indices = np.arange(segmentations.shape[0])
-        plot_ax.vlines(indices[segmentations == 1], -1, 1, label='segmentations', zorder=0, color='k')
-        plot_kl = plot_ax.twinx()
-        plot_kl.plot(plt_prep(info['state_kl'][i]), label='kl_divergence', c='r')
+        # plot_ax.vlines(indices[segmentations == 1], -1, 1, label='segmentations', zorder=0, color='k')
+        # plot_kl = plot_ax.twinx()
+        # plot_kl.plot(plt_prep(info['state_kl'][i]), label='kl_divergence', c='r')
 
         # Plot delta_t for sequence
         delta_t_ax = delta_t_fig.add_subplot(n_samples, 1, i+1)
@@ -148,19 +160,30 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
             latent_features_ax.plot(plt_prep(info['abstract_rep'][i, :, j]))
 
         if i == 0:
-            plot_ax.legend()
             delta_t_ax.legend()
             delta_t_logit_ax.legend()
+
+    plot_fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.winter), label="Time step")
+    plot_fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.autumn), label="Time step (gt)")
+
+    segmentations_fig = plt.figure(4)
+    segmentations = (info['segmentation_post_logits'] > 0.5).squeeze()
+    segmentation_x = plt_prep(info['ground_truth_traj'][:, 1:, 0][segmentations])
+    segmentation_y = plt_prep(info['ground_truth_traj'][:, 1:, 1][segmentations])
+    plt.scatter(segmentation_x, segmentation_y, c='k')
+
 
     logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
     logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
     logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
     logger.add_figure(prefix + '/latent_features', latent_features_fig, global_step)
+    logger.add_figure(prefix + '/segmentations', segmentations_fig, global_step)
 
     plot_fig.clf()
     delta_t_fig.clf()
     delta_t_logit_fig.clf()
     latent_features_fig.clf()
+    segmentations_fig.clf()
 
 def visualize_generations(model, logger, global_step, n_samples=3, prefix='test'):
     generated_trajs, info = model.generate(n_samples, generation_length=model.max_seq_len)
