@@ -154,6 +154,7 @@ class FullPrototypeModel(nn.Module):
 
         self.temperature = cfg.init_temperature
         self.time_loss_weight = cfg.time_loss_weight
+        self.state_kl_weight = cfg.state_transition_kl_weight
 
         self.encoder = StandardMLP(input_dim=data_dim, **cfg.encoder_params, output_dim=cfg.encoding_dim)
 
@@ -172,13 +173,15 @@ class FullPrototypeModel(nn.Module):
         self.query_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.query_mlp_encoder_params, output_dim=cfg.query_attention_dim)
         self.abstract_rep_post = StandardMLP(input_dim=cfg.query_attention_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
-        self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
-        abstract_rep_transformer_encoder_layer = GivenQueryTransformerEncoderLayer(d_query=cfg.abstract_rep_stoch_dim, d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
-        self.abstract_rep_transformer_encoder = GivenQueryTransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_params)
+        # self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
+        # abstract_rep_transformer_encoder_layer = GivenQueryTransformerEncoderLayer(d_query=cfg.abstract_rep_stoch_dim, d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
+        # self.abstract_rep_transformer_encoder = GivenQueryTransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_params)
         self.abstract_rep_transformer_nheads = cfg.abstract_rep_transformer_encoder_layer_params['nhead']
-        self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
-        self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
-        self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
+        # self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
+        # self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
+        # self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
+        self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
+        self.abstract_rep_dim = cfg.abstract_rep_stoch_dim
 
         self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + self.abstract_rep_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
@@ -246,12 +249,15 @@ class FullPrototypeModel(nn.Module):
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples, std_scalar=abstract_sample_std_scalar)
 
-        abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1))
-        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_stoch_samples, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
-        abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
-        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1))
+        # abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_rep_stoch_samples, broadcast_positional_encoding], dim=-1))
+        # transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_stoch_samples, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+        # abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
+        # abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1))
+        # abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
+        # abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_stoch_samples, 1))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
-        abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
+        abstract_rep = abstract_rep_stoch_samples
 
         state_rep_post_params = self.state_rep_post(torch.cat([encodings, abstract_rep], dim=-1))
         state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
@@ -300,13 +306,16 @@ class FullPrototypeModel(nn.Module):
         # abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
 
         # TODO: Don't include time loss factor into KL loss, keep them factorized
-        abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
-        # abstract_rep_kl_loss = torch.mean(torch.sum((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples.detach(), dim=1) / torch.sum(segmentation_samples, dim=1))
+        # abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
+        abs_kl = self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)
+        abstract_rep_kl_loss = torch.mean(torch.sum(abs_kl * segmentation_samples.detach(), dim=1) / torch.sum(segmentation_samples, dim=1))
 
         state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
         state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
 
-        state_rep_kl_loss = torch.mean(self.kl_balance_gaussian(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance))
+        state_kl = self.kl_balance_gaussian(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance)
+        state_rep_kl_loss = torch.mean(state_kl)
+        info['state_kl'] = state_kl
 
         segmentation_post_logits = info['segmentation_post_logits']
         segmentation_prior_logits = info['segmentation_prior_logits']
@@ -317,7 +326,7 @@ class FullPrototypeModel(nn.Module):
         model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
             self.time_loss_weight * segmentation_loss + \
             self.cfg.abstract_transition_kl_weight * abstract_rep_kl_loss + \
-            self.cfg.state_transition_kl_weight * state_rep_kl_loss + \
+            self.state_kl_weight * state_rep_kl_loss + \
             self.cfg.segmentation_kl_weight * segmentation_kl_loss
 
         metrics = dict(
@@ -346,7 +355,8 @@ class FullPrototypeModel(nn.Module):
         if given_segmentations is not None:
             segmentations = given_segmentations
 
-        abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
+        # abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
+        abstract_rep = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
         if given_abstract_stoch is not None:
             abstract_rep[..., :self.cfg.abstract_rep_stoch_dim] = given_abstract_stoch
 
@@ -363,7 +373,8 @@ class FullPrototypeModel(nn.Module):
         abstract_seg_eps = torch.zeros_like(abstract_eps)
 
         for i in range(generation_length):
-            abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1, -self.cfg.abstract_rep_deter_dim:], 1)[:, -1:])
+            # abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1, -self.cfg.abstract_rep_deter_dim:], 1)[:, -1:])
+            abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1], 1)[:, -1:])
             abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
             segment = segmentations[:, i:i + 1].unsqueeze(-1)
             if given_abstract_stoch is None:
@@ -382,11 +393,11 @@ class FullPrototypeModel(nn.Module):
             segmentation_samples = segmentations[:, :i + 1]
             _, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
-            abstract_stoch_hist = abstract_rep[:, :i + 1, :self.cfg.abstract_rep_stoch_dim]
-            abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_stoch_hist, broadcast_positional_encoding[:, :i + 1]], dim=-1))
-            transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_stoch_hist, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
-            abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
-            abstract_rep[:, i:i + 1, -self.cfg.abstract_rep_deter_dim:] = abstract_rep_deter[:, -1:]
+            # abstract_stoch_hist = abstract_rep[:, :i + 1, :self.cfg.abstract_rep_stoch_dim]
+            # abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_stoch_hist, broadcast_positional_encoding[:, :i + 1]], dim=-1))
+            # transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_stoch_hist, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+            # abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
+            # abstract_rep[:, i:i + 1, -self.cfg.abstract_rep_deter_dim:] = abstract_rep_deter[:, -1:]
 
             state_rep_prior_params = self.state_rep_prior(torch.cat([(shift_forward(state_rep[:, :i + 1, -self.cfg.state_rep_deter_dim:], 1))[:, -1:] * (1 - segmentation_samples[:, -1:]).unsqueeze(-1), abstract_rep[:, i:i + 1]], dim=-1))
             state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
@@ -498,7 +509,8 @@ class FullPrototypeModel(nn.Module):
         abstract_causal_segmentation_attention_mask = abstract_causal_attention_weights.unsqueeze(1).expand(batch_size, self.abstract_rep_transformer_nheads, seq_len, seq_len)
         abstract_causal_segmentation_attention_mask = abstract_causal_segmentation_attention_mask.reshape(batch_size * self.abstract_rep_transformer_nheads, seq_len, seq_len)
         if causal_segmentation_attention_mask.requires_grad:
-            causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
+            # causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
+            causal_segmentation_attention_mask.register_hook(lambda grad: torch.nan_to_num(grad, nan=0))
         if abstract_causal_segmentation_attention_mask.requires_grad:
             abstract_causal_segmentation_attention_mask.register_hook(lambda grad: torch.clamp(torch.nan_to_num(grad, nan=0), min=-1e3, max=1e3))
 
@@ -510,6 +522,9 @@ class FullPrototypeModel(nn.Module):
 
     def set_time_loss_weight(self, time_loss_weight):
         self.time_loss_weight = time_loss_weight
+
+    def set_state_kl_weight(self, state_kl_weight):
+        self.state_kl_weight = state_kl_weight
 
     def hard_sample(self):
         self.sample = True
