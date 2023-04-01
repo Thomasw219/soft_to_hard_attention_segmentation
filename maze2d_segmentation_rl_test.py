@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from data import Maze2DDataset as Dataset
-from models import FullPrototypeModel
+from models import RLSegmentationModel
 from utils import make_scheduler
 
 @hydra.main(version_base='1.3', config_path='cfgs', config_name='maze_2d_experiment')
@@ -26,7 +26,7 @@ def test_full_prototype(cfg):
     test_dataset = Dataset(**cfg['test_dataset'])
     test_dataloader = DataLoader(test_dataset, **cfg['dataloader'])
 
-    model = FullPrototypeModel(cfg['model'], data_dim=4, max_seq_len=cfg['train_dataset']['signal_length'])
+    model = RLSegmentationModel(cfg['model'], obs_dim=4, action_dim=2, max_seq_len=cfg['train_dataset']['signal_length'])
     model.to(cfg['device'])
 
     if cfg['model_load_path'] is not None:
@@ -58,13 +58,14 @@ def test_full_prototype(cfg):
         # model.set_state_kl_weight(state_kl_weight)
         # logger.add_scalar('train/state_kl_weight', state_kl_weight, global_step)
         model.train()
-        for i, traj in tqdm(enumerate(train_dataloader), desc='Train Batch', position=1, total=len(train_dataloader), leave=False):
+        for i, (obs, act) in tqdm(enumerate(train_dataloader), desc='Train Batch', position=1, total=len(train_dataloader), leave=False):
             train_start_time = time()
-            traj = traj.to(device=cfg['device'], dtype=torch.float32)
+            obs = obs.to(device=cfg['device'], dtype=torch.float32)
+            act = act.to(device=cfg['device'], dtype=torch.float32)
             global_step = i + epoch * epoch_steps
 
             optimizer.zero_grad()
-            loss, metrics, info = model.get_loss(traj)
+            loss, metrics, info = model.get_loss(obs, act)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['optimizer']['grad_clip'] if 'grad_clip' in cfg['optimizer'] else np.inf)
             if info["segmentation_samples"].grad is not None:
@@ -88,10 +89,11 @@ def test_full_prototype(cfg):
             with torch.no_grad():
                 model.eval()
                 metric_list = []
-                for i, traj in tqdm(enumerate(test_dataloader), desc='Test Batch', position=1, total=len(test_dataloader), leave=False):
+                for i, (obs, act) in tqdm(enumerate(test_dataloader), desc='Test Batch', position=1, total=len(test_dataloader), leave=False):
                     test_start_time = time()
-                    traj = traj.to(device=cfg['device'], dtype=torch.float32)
-                    loss, metrics, info = model.get_loss(traj)
+                    obs = obs.to(device=cfg['device'], dtype=torch.float32)
+                    act = act.to(device=cfg['device'], dtype=torch.float32)
+                    loss, metrics, info = model.get_loss(obs, act)
                     metrics['step_time'] = time() - test_start_time
 
                 metric_list.append(metrics)
@@ -106,7 +108,6 @@ def test_full_prototype(cfg):
                     torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'full_model.pt'))
 
                 visualize(info, logger, global_step, prefix='test')
-                visualize_generations(model, logger, global_step, prefix='test')
 
 def get_optimizer(cfg, model):
     if cfg['type'] == 'adam':
@@ -118,26 +119,23 @@ def plt_prep(tensor):
     return tensor.detach().cpu().numpy().squeeze()
 
 def visualize(info, logger, global_step, n_samples=3, prefix='train'):
-    sequence_length = info['ground_truth_traj'].shape[1]
+    sequence_length = info['ground_truth_obs'].shape[1]
     norm = mpl.colors.Normalize(vmin=1, vmax=sequence_length)
-    colors = cm.winter(norm(np.array([k for k in range(1, sequence_length + 1)])))
     colors_gt = cm.autumn(norm(np.array([k for k in range(1, sequence_length + 1)])))
 
     plot_fig = plt.figure(0)
     delta_t_fig = plt.figure(1)
     delta_t_logit_fig = plt.figure(2)
     latent_features_fig = plt.figure(3)
+    actions_fig = plt.figure(4)
     for i in range(n_samples):
         # Plot ground truth and reconstruction for n_samples
         plot_ax = plot_fig.add_subplot(n_samples, 1, i+1)
-        gt_traj_x = plt_prep(info['ground_truth_traj'][i, :, 0])
-        gt_traj_y = plt_prep(info['ground_truth_traj'][i, :, 1])
-        recon_traj_x = plt_prep(info['reconstructed_traj'][i, :, 0])
-        recon_traj_y = plt_prep(info['reconstructed_traj'][i, :, 1])
+        gt_traj_x = plt_prep(info['ground_truth_obs'][i, :, 0])
+        gt_traj_y = plt_prep(info['ground_truth_obs'][i, :, 1])
         segmentations = plt_prep(info['segmentation_samples'][i]) > 0.5
         for t in range(sequence_length - 1):
             plot_ax.plot(gt_traj_x[t:t + 2], gt_traj_y[t:t + 2], c=colors_gt[t])
-            plot_ax.plot(recon_traj_x[t:t + 2], recon_traj_y[t:t + 2], c=colors[t])
             if segmentations[t]:
                 plot_ax.scatter(gt_traj_x[t], gt_traj_y[t], c='k', s=10)
         segmentations = plt_prep(info['segmentation_samples'][i])
@@ -160,17 +158,25 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
         for j in range(info['abstract_rep'].shape[-1]):
             latent_features_ax.plot(plt_prep(info['abstract_rep'][i, :, j]))
 
+        # Plot actions for sequence
+        actions_ax = actions_fig.add_subplot(n_samples, 1, i+1)
+        actions_ax.set_ylim(-1, 1)
+        actions_ax.plot(plt_prep(info['ground_truth_act'][i, :, 0]), label='action_x', c='r')
+        actions_ax.plot(plt_prep(info['reconstructed_act'][i, :, 0]), label='action_x_reconstruction', c='orange')
+        actions_ax.plot(plt_prep(info['ground_truth_act'][i, :, 1]), label='action_y', c='b')
+        actions_ax.plot(plt_prep(info['reconstructed_act'][i, :, 1]), label='action_y_reconstruction', c='c')
+
         if i == 0:
             delta_t_ax.legend()
             delta_t_logit_ax.legend()
+            actions_ax.legend()
 
-    plot_fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.winter), label="Time step")
     plot_fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.autumn), label="Time step (gt)")
 
-    segmentations_fig = plt.figure(4)
+    segmentations_fig = plt.figure(5)
     segmentations = (info['segmentation_post_logits'] > 0.5).squeeze()
-    segmentation_x = plt_prep(info['ground_truth_traj'][:, 1:, 0][segmentations])
-    segmentation_y = plt_prep(info['ground_truth_traj'][:, 1:, 1][segmentations])
+    segmentation_x = plt_prep(info['ground_truth_obs'][:, 1:, 0][segmentations])
+    segmentation_y = plt_prep(info['ground_truth_obs'][:, 1:, 1][segmentations])
     plt.scatter(segmentation_x, segmentation_y, c='k')
 
 
@@ -178,35 +184,15 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
     logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
     logger.add_figure(prefix + '/latent_features', latent_features_fig, global_step)
+    logger.add_figure(prefix + '/actions', actions_fig, global_step)
     logger.add_figure(prefix + '/segmentations', segmentations_fig, global_step)
 
     plot_fig.clf()
     delta_t_fig.clf()
     delta_t_logit_fig.clf()
     latent_features_fig.clf()
+    actions_fig.clf()
     segmentations_fig.clf()
-
-def visualize_generations(model, logger, global_step, n_samples=3, prefix='test'):
-    generated_trajs, info = model.generate(n_samples, generation_length=model.max_seq_len)
-    plot_fig = plt.figure(0)
-    sequence_length = model.max_seq_len
-    norm = mpl.colors.Normalize(vmin=1, vmax=sequence_length)
-    colors_gt = cm.winter(norm(np.array([k for k in range(1, sequence_length + 1)])))
-    for i in range(n_samples):
-        # Plot generated trajectories and discrete segmentation points
-        plot_ax = plot_fig.add_subplot(n_samples, 1, i+1)
-        gt_traj_x = plt_prep(generated_trajs[i, :, 0])
-        gt_traj_y = plt_prep(generated_trajs[i, :, 1])
-        segmentations = plt_prep(info['segmentation_samples'][i]) > 0.5
-        for t in range(sequence_length - 1):
-            plot_ax.plot(gt_traj_x[t:t + 2], gt_traj_y[t:t + 2], c=colors_gt[t])
-            if segmentations[t]:
-                plot_ax.scatter(gt_traj_x[t], gt_traj_y[t], c='k', s=10)
-
-    plot_fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.winter), label="Time step")
-    logger.add_figure(prefix + '/generation', plot_fig, global_step)
-
-    plot_fig.clf()
 
 if __name__ == '__main__':
     test_full_prototype()

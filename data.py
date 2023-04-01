@@ -193,7 +193,7 @@ class Maze2DDataset:
     def __getitem__(self, index):
         ep = self.episodes[index]
         start_index = np.random.randint(0, ep['observations'].shape[0] - self.signal_length)
-        return ep['observations'][start_index:start_index+self.signal_length]#, ep['actions'][start_index:start_index+self.signal_length]
+        return ep['observations'][start_index:start_index+self.signal_length], ep['actions'][start_index:start_index+self.signal_length]
 
     def __len__(self):
         return self.n_episodes

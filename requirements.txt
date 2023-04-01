@@ -42,3 +42,4 @@ torchdiffeq
 torchcde
 PyYAML
 tensorboard
+tqdm

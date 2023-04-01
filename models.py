@@ -543,6 +543,152 @@ class FullPrototypeModel(nn.Module):
         self.hard_sample()
         super().eval()
 
+class RLSegmentationModel(FullPrototypeModel):
+    def __init__(self, cfg, obs_dim, action_dim, max_seq_len):
+        super().__init__(cfg, obs_dim + action_dim, max_seq_len)
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+
+        self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim + self.abstract_rep_dim + obs_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
+        self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + obs_dim, **cfg.decoder_params, output_dim=action_dim)
+        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + obs_dim, **cfg.segmentation_prior_params, output_dim=1)
+
+    def forward(self, obs, act, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0):
+        # traj is a tensor of shape (batch_size, seq_len, data_dim)
+        traj = torch.cat([obs, act], dim=-1)
+        batch_size = traj.shape[0]
+        seq_len = traj.shape[1]
+        device = traj.device
+        assert seq_len <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
+        encodings = self.encoder(traj)
+        broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:, :traj.shape[1]].expand(batch_size, -1, -1))
+
+        segmentation_encodings = self.segmentation_mlp_encoder(encodings)
+        transformed_segmentation_encodings = self.segmentation_transformer_encoder(torch.transpose(segmentation_encodings, 0, 1)).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
+        segmentation_post_logits = []
+        segmentation_post_probs = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
+        segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
+        y_samples = []
+        gru_hidden = torch.zeros(batch_size, self.cfg.segmentation_transformer_dim, device=device, dtype=torch.float32)
+        for i in range(1, seq_len):
+            gru_hidden = self.segmentation_gru(torch.cat([segmentation_post_probs[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
+            segmentation_post_logit = self.segmentation_post(gru_hidden)
+            segmentation_sample, y_sample = concrete.sample_binary_concrete(segmentation_post_logit, self.temperature, hard=self.sample)
+            segmentation_post_probs.append(torch.sigmoid(segmentation_post_logit))
+            segmentation_post_logits.append(segmentation_post_logit)
+            if self.cfg['fix_segmentation_period'] is None:
+                segmentation_samples.append(segmentation_sample)
+            else:
+                if i % self.cfg['fix_segmentation_period'] == 0:
+                    segmentation_samples.append(torch.ones_like(segmentation_sample))
+                else:
+                    segmentation_samples.append(torch.zeros_like(segmentation_sample))
+            y_samples.append(y_sample)
+
+        segmentation_post_logits = torch.stack(segmentation_post_logits, dim=1)
+        segmentation_samples = torch.stack(segmentation_samples, dim=1)
+        y_samples = torch.stack(y_samples, dim=1)
+
+        segmentation_samples = segmentation_samples.squeeze(-1)
+        if segmentation_samples.requires_grad:
+            segmentation_samples.register_hook(lambda grad: self.cfg.time_grad_scalar * grad)
+        if segmentation_samples.requires_grad:
+            segmentation_samples.retain_grad()
+        segment_weights, _, causal_segmentation_attention_mask, _ = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
+
+        query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
+        repeated_query_encodings = torch.cat([query_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.query_attention_dim)
+        attended_query_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_query_encodings, dim=2)
+        abstract_rep_post_params = self.abstract_rep_post(attended_query_encodings)
+        abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
+        abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples, std_scalar=abstract_sample_std_scalar)
+
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_stoch_samples, 1))
+        abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
+        abstract_rep = abstract_rep_stoch_samples
+
+        state_rep_post_params = self.state_rep_post(torch.cat([encodings, abstract_rep], dim=-1))
+        state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
+        state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds, std_scalar=state_sample_std_scalar)
+
+        state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep, obs], dim=-1))
+        transformed_state_rep_encodings = self.state_rep_transformer_encoder(torch.transpose(state_rep_encodings, 0, 1), mask=causal_segmentation_attention_mask).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
+        state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
+        state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples).unsqueeze(-1), abstract_rep], dim=-1))
+        state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
+        state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
+
+        # state_rep = torch.zeros_like(state_rep)
+        decoder_input = torch.cat([state_rep, abstract_rep, obs], dim=-1)
+        segmentation_prior_logits = self.segmentation_prior(decoder_input)[:, :-1]
+        reconstructed_traj = self.decoder(decoder_input)
+
+        return reconstructed_traj, dict(
+            segment_weights=segment_weights,
+            segmentation_post_logits=segmentation_post_logits,
+            segmentation_samples=segmentation_samples,
+            y_samples=y_samples,
+            abstract_rep_post_means=abstract_rep_post_means,
+            abstract_rep_post_stds=abstract_rep_post_stds,
+            abstract_rep_prior_means=abstract_rep_prior_means,
+            abstract_rep_prior_stds=abstract_rep_prior_stds,
+            abstract_rep=abstract_rep,
+            state_rep_post_means=state_rep_post_means,
+            state_rep_post_stds=state_rep_post_stds,
+            state_rep_prior_means=state_rep_prior_means,
+            state_rep_prior_stds=state_rep_prior_stds,
+            state_rep=state_rep,
+            segmentation_prior_logits=segmentation_prior_logits,
+        )
+
+    def get_loss(self, obs, act):
+        reconstructed_act, info = self.forward(obs, act)
+        info['reconstructed_act'] = reconstructed_act
+        info['ground_truth_act'] = act
+        info['ground_truth_obs'] = obs
+        reconstruction_loss = nn.functional.mse_loss(act, reconstructed_act)
+        segmentation_samples = info['segmentation_samples']
+        average_compression = 1 / torch.mean(segmentation_samples[:, 1:])
+
+        abstract_rep_post_means, abstract_rep_post_stds = info['abstract_rep_post_means'], info['abstract_rep_post_stds']
+        abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
+        # abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
+
+        # TODO: Don't include time loss factor into KL loss, keep them factorized
+        # abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
+        abs_kl = self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)
+        abstract_rep_kl_loss = torch.mean(torch.sum(abs_kl * segmentation_samples.detach(), dim=1) / torch.sum(segmentation_samples, dim=1))
+
+        state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
+        state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
+
+        state_kl = self.kl_balance_gaussian(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance)
+        state_rep_kl_loss = torch.mean(state_kl)
+        info['state_kl'] = state_kl
+
+        segmentation_post_logits = info['segmentation_post_logits']
+        segmentation_prior_logits = info['segmentation_prior_logits']
+        segmentation_loss = torch.sigmoid(segmentation_post_logits).mean()
+        temp = torch.tensor(self.temperature, device=segmentation_post_logits.device)
+        segmentation_kl_loss = torch.mean(concrete.y_kl_divergence(info['y_samples'], segmentation_prior_logits, temp, segmentation_post_logits, temp, kl_balance=self.cfg.segmentation_kl_balance))
+
+        model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
+            self.time_loss_weight * segmentation_loss + \
+            self.cfg.abstract_transition_kl_weight * abstract_rep_kl_loss + \
+            self.state_kl_weight * state_rep_kl_loss + \
+            self.cfg.segmentation_kl_weight * segmentation_kl_loss
+
+        metrics = dict(
+            loss=model_loss.item(),
+            reconstruction_loss=reconstruction_loss.item(),
+            segmentation_loss=segmentation_loss.item(),
+            average_compression=torch.minimum(average_compression, torch.tensor(self.max_seq_len, device=average_compression.device)).item(),
+            abstract_transition_kl_loss=abstract_rep_kl_loss.item(),
+            state_transition_kl_loss=state_rep_kl_loss.item(),
+            segmentation_kl_loss=segmentation_kl_loss.item(),
+        )
+
+        return model_loss, metrics, info
 
 def get_activation(activation):
     if activation == 'elu':
