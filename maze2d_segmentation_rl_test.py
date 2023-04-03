@@ -133,7 +133,7 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
         plot_ax = plot_fig.add_subplot(n_samples, 1, i+1)
         gt_traj_x = plt_prep(info['ground_truth_obs'][i, :, 0])
         gt_traj_y = plt_prep(info['ground_truth_obs'][i, :, 1])
-        segmentations = plt_prep(info['segmentation_samples'][i]) > 0.5
+        segmentations = plt_prep(torch.sigmoid(info['segmentation_post_logits'][i])) > 0.5
         for t in range(sequence_length - 1):
             plot_ax.plot(gt_traj_x[t:t + 2], gt_traj_y[t:t + 2], c=colors_gt[t])
             if segmentations[t]:
