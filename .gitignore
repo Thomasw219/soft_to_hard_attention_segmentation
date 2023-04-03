@@ -3,4 +3,5 @@ outputs/*
 figures/*
 *.pyc
 *.npy
+*.pkl
 
