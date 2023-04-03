@@ -170,7 +170,7 @@ class FullPrototypeModel(nn.Module):
         self.segmentation_gru = nn.GRUCell(cfg.segmentation_transformer_dim + 1, cfg.segmentation_transformer_dim)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=1)
 
-        self.query_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.positional_encoding_dim, **cfg.query_mlp_encoder_params, output_dim=cfg.query_attention_dim)
+        self.query_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.segmentation_transformer_dim, **cfg.query_mlp_encoder_params, output_dim=cfg.query_attention_dim)
         self.abstract_rep_post = StandardMLP(input_dim=cfg.query_attention_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
         # self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
@@ -553,6 +553,9 @@ class RLSegmentationModel(FullPrototypeModel):
         self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + obs_dim, **cfg.decoder_params, output_dim=action_dim)
         self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + obs_dim, **cfg.segmentation_prior_params, output_dim=1)
 
+        self.gru_init = StandardMLP(input_dim=self.cfg.segmentation_transformer_dim, layer_sizes=[256, 256], output_dim=self.cfg.segmentation_transformer_dim)
+        self.abstract_init = StandardMLP(input_dim=obs_dim, layer_sizes=[256, 256], output_dim=self.cfg.abstract_rep_stoch_dim)
+
     def forward(self, obs, act, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
         traj = torch.cat([obs, act], dim=-1)
@@ -569,10 +572,13 @@ class RLSegmentationModel(FullPrototypeModel):
         segmentation_post_probs = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         y_samples = []
-        gru_hidden = torch.zeros(batch_size, self.cfg.segmentation_transformer_dim, device=device, dtype=torch.float32)
+        # gru_hidden = torch.zeros(batch_size, self.cfg.segmentation_transformer_dim, device=device, dtype=torch.float32)
+        gru_hidden = self.gru_init(transformed_segmentation_encodings[:, 0, :])
         for i in range(1, seq_len):
             gru_hidden = self.segmentation_gru(torch.cat([segmentation_post_probs[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
             segmentation_post_logit = self.segmentation_post(gru_hidden)
+            if segmentation_post_logit.requires_grad:
+                segmentation_post_logit.retain_grad()
             segmentation_sample, y_sample = concrete.sample_binary_concrete(segmentation_post_logit, self.temperature, hard=self.sample)
             segmentation_post_probs.append(torch.sigmoid(segmentation_post_logit))
             segmentation_post_logits.append(segmentation_post_logit)
@@ -585,6 +591,7 @@ class RLSegmentationModel(FullPrototypeModel):
                     segmentation_samples.append(torch.zeros_like(segmentation_sample))
             y_samples.append(y_sample)
 
+        segmentation_post_logit_list = segmentation_post_logits
         segmentation_post_logits = torch.stack(segmentation_post_logits, dim=1)
         segmentation_samples = torch.stack(segmentation_samples, dim=1)
         y_samples = torch.stack(y_samples, dim=1)
@@ -596,14 +603,16 @@ class RLSegmentationModel(FullPrototypeModel):
             segmentation_samples.retain_grad()
         segment_weights, _, causal_segmentation_attention_mask, _ = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
-        query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
+        # query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
+        query_encodings = self.query_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
         repeated_query_encodings = torch.cat([query_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.query_attention_dim)
         attended_query_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_query_encodings, dim=2)
         abstract_rep_post_params = self.abstract_rep_post(attended_query_encodings)
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples, std_scalar=abstract_sample_std_scalar)
 
-        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_stoch_samples, 1))
+        abstract_init = self.abstract_init(obs[:, 0:1, :])
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_stoch_samples, 1, fill=abstract_init))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep = abstract_rep_stoch_samples
 
@@ -626,6 +635,7 @@ class RLSegmentationModel(FullPrototypeModel):
         return reconstructed_traj, dict(
             segment_weights=segment_weights,
             segmentation_post_logits=segmentation_post_logits,
+            segmentation_post_logit_list=segmentation_post_logit_list,
             segmentation_samples=segmentation_samples,
             y_samples=y_samples,
             abstract_rep_post_means=abstract_rep_post_means,
@@ -698,8 +708,12 @@ def get_activation(activation):
     else:
         return NotImplementedError("Activation not implemented yet")
 
-def shift_forward(x, shift):
-    return torch.cat([torch.zeros_like(x[:, -shift:]), x[:, :-shift]], dim=1)
+def shift_forward(x, shift, fill=None):
+    if fill is None:
+        return torch.cat([torch.zeros_like(x[:, -shift:]), x[:, :-shift]], dim=1)
+    else:
+        assert fill.shape[1] == shift
+        return torch.cat([fill, x[:, :-shift]], dim=1)
 
 class StandardMLP(nn.Module):
     def __init__(self, input_dim, layer_sizes=[400, 400, 400, 400], output_dim=1, activate_last=False, activation='elu'):

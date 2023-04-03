@@ -84,8 +84,7 @@ def main():
             if done:
                 done = False
                 env.set_target()
-            else:
-                s = ns
+            s = ns
 
             if ts == max_episode_steps:
                 break

@@ -138,7 +138,7 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
             plot_ax.plot(gt_traj_x[t:t + 2], gt_traj_y[t:t + 2], c=colors_gt[t])
             if segmentations[t]:
                 plot_ax.scatter(gt_traj_x[t], gt_traj_y[t], c='k', s=10)
-        segmentations = plt_prep(info['segmentation_samples'][i])
+        segmentations = plt_prep(torch.sigmoid(info['segmentation_post_logits'][i]))
         indices = np.arange(segmentations.shape[0])
         # plot_ax.vlines(indices[segmentations == 1], -1, 1, label='segmentations', zorder=0, color='k')
         # plot_kl = plot_ax.twinx()

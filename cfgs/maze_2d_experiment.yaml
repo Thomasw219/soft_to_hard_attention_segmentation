@@ -1,9 +1,9 @@
 log_dir: 'logs/maze'
-model_load_path: 'logs/maze/maze_policy_segmentation_03-31-2023_18-58-41/best_model.pt'
+model_load_path: null # 'logs/maze/maze_policy_segmentation_04-03-2023_13-16-09/best_model.pt'
 name: 'maze_policy_segmentation'
-device: 'cuda:0'
+device: 'cuda:1'
 log_every: 100
-viz_every: 500
+viz_every: 100
 np_seed: 0
 
 epochs: 4000
@@ -15,7 +15,7 @@ dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
 temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.50, min_temp: 0.50}
 # temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 400}
-time_loss_weight_scheduler: {type: 'linear', start_value: 1.20, end_value: 1.20, start_step: 10, end_step: 10}
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.25, end_value: 0.25, start_step: 10, end_step: 10}
 # state_kl_weight_scheduler: {type: 'linear', start_value: 0.05, end_value: 0.05, start_step: 0, end_step: 100}
 
 defaults:
