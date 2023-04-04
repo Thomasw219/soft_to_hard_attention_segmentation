@@ -97,7 +97,7 @@ def main():
 
     os.makedirs('data/raw', exist_ok=True)
     if args.noisy:
-        fname = 'data/raw/%s-noisy.hdf5' % args.env_name
+        fname = 'data/raw/%s-noisy.npy' % args.env_name
     else:
         fname = 'data/raw/%s.npy' % args.env_name
     npify(episodes)
