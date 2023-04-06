@@ -1,9 +1,9 @@
 reconstruction_loss_weight: 1.0
-abstract_transition_kl_weight: 0.001
+abstract_transition_kl_weight: 0.0001
 abstract_kl_balance: 0.8
-state_transition_kl_weight: 0.60
+state_transition_kl_weight: 0.01
 state_kl_balance: 0.8
-segmentation_kl_weight: 0.03
+segmentation_kl_weight: 0.01
 segmentation_kl_balance: 1.0
 time_loss_weight: 0.0 # Handled by scheduler
 init_temperature: 1.0 # Handled by scheduler
@@ -31,7 +31,7 @@ query_attention_dim: 256
 query_dim: 256
 query_mlp_decoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 
-abstract_rep_stoch_dim: 32
+abstract_rep_stoch_dim: 128
 abstract_rep_deter_dim: 16
 compression_transformer_dim: 64
 compression_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
@@ -63,4 +63,4 @@ state_rep_prior_params: {layer_sizes: [256, 256], activate_last: False, activati
 
 segmentation_prior_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 
-decoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
+decoder_params: {layer_sizes: [400, 400, 400, 400], activate_last: False, activation: 'elu'}

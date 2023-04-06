@@ -7,6 +7,7 @@ import d4rl
 from d4rl.locomotion import maze_env, ant, swimmer
 from d4rl.locomotion.wrappers import NormalizedBoxEnv
 import torch
+import ipdb
 from PIL import Image
 import os
 
@@ -177,9 +178,9 @@ def main():
         print(t)
 
     if args.noisy:
-        fname = 'data/raw/' + args.env + '_maze_%s_noisy_%s_multigoal_%s.npy' % (args.maze, str(args.multi_start), str(args.multigoal))
+        fname = 'data/raw/' + args.env + '_maze_%s_noisy_%s_multigoal_%s_og_tol.npy' % (args.maze, str(args.multi_start), str(args.multigoal))
     else:
-        fname = 'data/raw/' + args.env + 'maze_%s_%s_multigoal_%s.npy' % (args.maze, str(args.multi_start), str(args.multigoal))
+        fname = 'data/raw/' + args.env + 'maze_%s_%s_multigoal_%s_og_tol.npy' % (args.maze, str(args.multi_start), str(args.multigoal))
     npify(episodes)
     np.save(fname, episodes, allow_pickle=True)
 

@@ -1,15 +1,15 @@
-log_dir: 'logs/maze'
-model_load_path: 'logs/maze/maze_policy_segmentation_04-03-2023_16-53-45/best_model.pt'
+log_dir: 'logs/ant_maze'
+model_load_path: null
 name: 'maze_policy_segmentation'
 device: 'cuda:0'
 log_every: 100
-viz_every: 500
+viz_every: 100
 np_seed: 0
 
 epochs: 4000
 
-train_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}
-test_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}
+train_dataset: {signal_length: 128}
+test_dataset: {signal_length: 128}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
@@ -21,3 +21,4 @@ time_loss_weight_scheduler: {type: 'linear', start_value: 0.25, end_value: 0.25,
 defaults:
   - model: full_prototype_v1
   - optimizer: default_optimizer
+

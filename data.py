@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+import gym
+import d4rl
 
 class OrnsteinUhlenbeckProcess:
     def __init__(self, dim, theta, sigma, dt, mu=0):
@@ -180,7 +182,7 @@ class SimplePiecewiseLinear(PiecewiseSineBase):
             idx += l
         return signal.reshape((self.signal_length, 1))
 
-class Maze2DDataset:
+class GeneratedD4RLDataset:
     def __init__(
             self,
             signal_length=128,
@@ -189,6 +191,8 @@ class Maze2DDataset:
         self.signal_length = signal_length
         self.episodes = np.load(data_path, allow_pickle=True)
         self.n_episodes = len(self.episodes)
+        self.obs_dim = self.episodes[0]['observations'].shape[-1]
+        self.action_dim = self.episodes[0]['actions'].shape[-1]
 
     def __getitem__(self, index):
         ep = self.episodes[index]
@@ -197,6 +201,30 @@ class Maze2DDataset:
 
     def __len__(self):
         return self.n_episodes
+
+class D4RLDataset:
+    def __init__(
+            self,
+            signal_length=128,
+            dataset_name='antmaze-large-diverse-v0'
+    ):
+        env = gym.make(dataset_name)
+        dataset = env.get_dataset()
+        assert dataset_name == 'antmaze-large-diverse-v0'
+        episode_points = [0]
+        episode_points.extend([1001 + i for i in range(0, 1000000 - 1000, 1001)])
+        self.signal_length = signal_length
+        self.episodes = [{k : v[episode_start:episode_end] for k, v in dataset.items()} for episode_start, episode_end in zip(episode_points[:-1], episode_points[1:])]
+        self.obs_dim = self.episodes[0]['observations'].shape[-1]
+        self.action_dim = self.episodes[0]['actions'].shape[-1]
+
+    def __getitem__(self, index):
+        ep = self.episodes[index]
+        start_index = np.random.randint(0, ep['observations'].shape[0] - self.signal_length)
+        return ep['observations'][start_index:start_index+self.signal_length], ep['actions'][start_index:start_index+self.signal_length]
+
+    def __len__(self):
+        return len(self.episodes)
 
 def test_fixed_size_piecewise_sine():
     dataset = FixedSizePiecewiseSine()
@@ -213,7 +241,7 @@ def test_fixed_size_piecewise_sine():
     # print(batch[0, :, 0])
 
 def test_maze2d_dataset():
-    dataset = Maze2DDataset()
+    dataset = GeneratedD4RLDataset()
 
     from torch.utils.data import DataLoader
     from time import time
@@ -224,6 +252,19 @@ def test_maze2d_dataset():
     print(time() - t)
     print(obs)
 
+def test_d4rl_dataset():
+    dataset = D4RLDataset()
+
+    from torch.utils.data import DataLoader
+    from time import time
+    np.random.seed(0)
+    t = time()
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=0)
+    obs, act = next(iter(dataloader))
+    print(time() - t)
+    print(obs, act)
+
 if __name__ == '__main__':
     # test_fixed_size_piecewise_sine()
-    test_maze2d_dataset()
+    # test_maze2d_dataset()
+    test_d4rl_dataset()

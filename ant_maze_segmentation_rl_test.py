@@ -13,11 +13,13 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from data import GeneratedD4RLDataset as Dataset
+from data import D4RLDataset as Dataset
 from models import RLSegmentationModel
 from utils import make_scheduler
 
-@hydra.main(version_base='1.3', config_path='cfgs', config_name='maze_2d_experiment')
+COLORS = ["#e74c3c", "#8e44ad", "#3498db", "#1abc9c", "#2ecc71", "#f1c40f", "#e67e22", "#2e4053"]
+
+@hydra.main(version_base='1.3', config_path='cfgs', config_name='ant_maze_experiment')
 def test_full_prototype(cfg):
     np.random.seed(cfg['np_seed'])
     train_dataset = Dataset(**cfg['train_dataset'])
@@ -126,7 +128,7 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     plot_fig = plt.figure(0)
     delta_t_fig = plt.figure(1)
     delta_t_logit_fig = plt.figure(2)
-    latent_features_fig = plt.figure(3)
+    # latent_features_fig = plt.figure(3)
     actions_fig = plt.figure(4)
     for i in range(n_samples):
         # Plot ground truth and reconstruction for n_samples
@@ -140,6 +142,7 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
                 plot_ax.scatter(gt_traj_x[t], gt_traj_y[t], c='k', s=10)
         segmentations = plt_prep(torch.sigmoid(info['segmentation_post_logits'][i]))
         indices = np.arange(segmentations.shape[0])
+        # plot_ax.vlines(indices[segmentations == 1], -1, 1, label='segmentations', zorder=0, color='k')
         # plot_kl = plot_ax.twinx()
         # plot_kl.plot(plt_prep(info['state_kl'][i]), label='kl_divergence', c='r')
 
@@ -153,17 +156,16 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
         delta_t_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0])), label='prior prob', c='r')
 
         # Plot latent features for sequence
-        latent_features_ax = latent_features_fig.add_subplot(n_samples, 1, i+1)
-        for j in range(info['abstract_rep'].shape[-1]):
-            latent_features_ax.plot(plt_prep(info['abstract_rep'][i, :, j]))
+        # latent_features_ax = latent_features_fig.add_subplot(n_samples, 1, i+1)
+        # for j in range(info['abstract_rep'].shape[-1]):
+        #     latent_features_ax.plot(plt_prep(info['abstract_rep'][i, :, j]))
 
         # Plot actions for sequence
         actions_ax = actions_fig.add_subplot(n_samples, 1, i+1)
         actions_ax.set_ylim(-1, 1)
-        actions_ax.plot(plt_prep(info['ground_truth_act'][i, :, 0]), label='action_x', c='r')
-        actions_ax.plot(plt_prep(info['reconstructed_act'][i, :, 0]), label='action_x_reconstruction', c='orange')
-        actions_ax.plot(plt_prep(info['ground_truth_act'][i, :, 1]), label='action_y', c='b')
-        actions_ax.plot(plt_prep(info['reconstructed_act'][i, :, 1]), label='action_y_reconstruction', c='c')
+        for j in range(info['ground_truth_act'][i].shape[-1]):
+            actions_ax.plot(plt_prep(info['ground_truth_act'][i, :, j]), c=COLORS[j])
+            actions_ax.plot(plt_prep(info['reconstructed_act'][i, :, j]), c=COLORS[j], linestyle='--', alpha=0.5)
         actions_ax.vlines(indices[segmentations > 0.5], -1, 1, label='segmentations', zorder=0, color='k')
 
         if i == 0:
@@ -183,14 +185,14 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
     logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
     logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
-    logger.add_figure(prefix + '/latent_features', latent_features_fig, global_step)
+    # logger.add_figure(prefix + '/latent_features', latent_features_fig, global_step)
     logger.add_figure(prefix + '/actions', actions_fig, global_step)
     logger.add_figure(prefix + '/segmentations', segmentations_fig, global_step)
 
     plot_fig.clf()
     delta_t_fig.clf()
     delta_t_logit_fig.clf()
-    latent_features_fig.clf()
+    # latent_features_fig.clf()
     actions_fig.clf()
     segmentations_fig.clf()
 
