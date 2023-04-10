@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+import imageio
 import numpy as np
 
 class SchedulerBase(ABC):
@@ -64,6 +65,13 @@ def make_scheduler(cfg):
         return GumbelSoftmaxScheduler(**cfg)
     else:
         raise ValueError(f'Unknown scheduler type: {cfg["type"]}')
+
+def make_video(frames,name):
+    writer = imageio.get_writer(name+'.mp4', fps=20)
+
+    for im in frames:
+        writer.append_data(im)
+    writer.close()
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt

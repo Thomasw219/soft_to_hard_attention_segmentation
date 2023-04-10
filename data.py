@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+import torch
+# from torchvision import datasets, transforms
 import gym
 import d4rl
 
@@ -208,15 +210,33 @@ class D4RLDataset:
             signal_length=128,
             dataset_name='antmaze-large-diverse-v0'
     ):
+        self.signal_length = signal_length
         env = gym.make(dataset_name)
         dataset = env.get_dataset()
-        assert dataset_name == 'antmaze-large-diverse-v0'
-        episode_points = [0]
-        episode_points.extend([1001 + i for i in range(0, 1000000 - 1000, 1001)])
-        self.signal_length = signal_length
+        if dataset_name == 'antmaze-large-diverse-v0':
+            episode_points = [0]
+            episode_points.extend([1001 + i for i in range(0, 1000000 - 1000, 1001)])
+            self.episodes = [{k : v[episode_start:episode_end] for k, v in dataset.items()} for episode_start, episode_end in zip(episode_points[:-1], episode_points[1:])]
+        elif dataset_name == 'kitchen-mixed-v0' or dataset_name == 'kitchen-partial-v0':
+            episode_points = [0]
+            episode_points.extend((np.arange(136950)[dataset['terminals']] + 1).tolist())
+        else:
+            raise NotImplementedError()
         self.episodes = [{k : v[episode_start:episode_end] for k, v in dataset.items()} for episode_start, episode_end in zip(episode_points[:-1], episode_points[1:])]
+
+        min_len = np.inf
+        for episode in self.episodes:
+            terminations = episode['terminals']
+            length = terminations.shape[0]
+            min_len = np.minimum(min_len, length)
+            assert length > self.signal_length
+        print("Min length: ", min_len)
+
         self.obs_dim = self.episodes[0]['observations'].shape[-1]
         self.action_dim = self.episodes[0]['actions'].shape[-1]
+
+    def get_episode(self, index):
+        return self.episodes[index]
 
     def __getitem__(self, index):
         ep = self.episodes[index]
@@ -225,6 +245,99 @@ class D4RLDataset:
 
     def __len__(self):
         return len(self.episodes)
+
+class StochasticMovingMNIST(object):
+
+    """Data Handler that creates Bouncing MNIST dataset on the fly."""
+
+    def __init__(self, train, data_root='./data/moving_mnist',
+                    obs_len=20, num_digits=2, context_len=10, image_size=64, deterministic=True, img_transforms=None):
+        path = data_root
+        self.seq_len = obs_len + context_len
+        self.context_len = context_len
+        self.num_digits = num_digits
+        self.image_size = image_size
+        self.step_length = 0.1
+        self.digit_size = 32
+        self.gap_size = image_size - self.digit_size
+        self.deterministic = deterministic
+        self.seed_is_set = False # multi threaded loading
+        self.channels = 1
+        self.transforms = img_transforms
+
+        self.data = datasets.MNIST(
+            path,
+            train=train,
+            download=True,
+            transform=transforms.Compose(
+                [transforms.Resize(self.digit_size),
+                 transforms.ToTensor()]))
+
+        self.N = len(self.data)
+
+    def set_seed(self, seed):
+        if not self.seed_is_set:
+            self.seed_is_set = True
+            np.random.seed(seed)
+
+    def __len__(self):
+        return self.N
+
+    def __getitem__(self, index):
+        image_size = self.image_size
+        digit_size = self.digit_size
+        x = np.zeros((self.seq_len,
+                      image_size,
+                      image_size,
+                      self.channels),
+                    dtype=np.float32)
+        for n in range(self.num_digits):
+            idx = np.random.randint(self.N)
+            digit, _ = self.data[idx]
+
+            sx = np.random.randint(image_size-digit_size)
+            sy = np.random.randint(image_size-digit_size)
+            dx = np.random.randint(-4, 5)
+            dy = np.random.randint(-4, 5)
+            for t in range(self.seq_len):
+                if sy < 0:
+                    sy = 0
+                    if self.deterministic:
+                        dy = -dy
+                    else:
+                        dy = np.random.randint(1, 5)
+                        dx = np.random.randint(-4, 5)
+                elif sy >= image_size-32:
+                    sy = image_size-32-1
+                    if self.deterministic:
+                        dy = -dy
+                    else:
+                        dy = np.random.randint(-4, 0)
+                        dx = np.random.randint(-4, 5)
+
+                if sx < 0:
+                    sx = 0
+                    if self.deterministic:
+                        dx = -dx
+                    else:
+                        dx = np.random.randint(1, 5)
+                        dy = np.random.randint(-4, 5)
+                elif sx >= image_size-32:
+                    sx = image_size-32-1
+                    if self.deterministic:
+                        dx = -dx
+                    else:
+                        dx = np.random.randint(-4, 0)
+                        dy = np.random.randint(-4, 5)
+
+                x[t, sy:sy+32, sx:sx+32, 0] += digit.numpy().squeeze()
+                sy += dy
+                sx += dx
+
+        x[x>1] = 1.
+        if self.transforms is not None:
+            x = self.transforms(x)
+        return x[self.context_len:], x[:self.context_len]
 
 def test_fixed_size_piecewise_sine():
     dataset = FixedSizePiecewiseSine()
@@ -253,7 +366,7 @@ def test_maze2d_dataset():
     print(obs)
 
 def test_d4rl_dataset():
-    dataset = D4RLDataset()
+    dataset = D4RLDataset(dataset_name='kitchen-mixed-v0')
 
     from torch.utils.data import DataLoader
     from time import time
@@ -262,7 +375,31 @@ def test_d4rl_dataset():
     dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=0)
     obs, act = next(iter(dataloader))
     print(time() - t)
-    print(obs, act)
+    print(obs.shape, act.shape)
+    print(obs[0, :, 30:])
+
+def test_moving_mnist():
+    from torch.utils.data import DataLoader
+    import matplotlib.pyplot as plt
+
+    dataset = StochasticMovingMNIST(
+        train=True,
+        seq_len=110,
+        image_size=64,
+        deterministic=False,
+        num_digits=1
+        )
+
+    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=0)
+
+    # visualize the stochastic moving mnist dataset
+    for _, seq in enumerate(data_loader):
+        for i in range(seq.shape[1]):
+            img = seq[0, i, ...]
+            plt.imshow(img)
+            plt.pause(0.5)
+            # plt.imsave(f"data/moving_mnist_test/{i}.png", img.squeeze().numpy(), cmap='gray')
+        break
 
 if __name__ == '__main__':
     # test_fixed_size_piecewise_sine()
