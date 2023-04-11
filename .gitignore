@@ -1,6 +1,7 @@
 logs/*
 outputs/*
 figures/*
+media/*
 *.pyc
 *.npy
 *.pkl
