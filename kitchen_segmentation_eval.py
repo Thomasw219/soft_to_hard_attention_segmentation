@@ -60,8 +60,11 @@ for _ in range(10):
 
     terminal_state_frames = np.array(frames)[np.array(terminal_indices, dtype=np.int32)]
 
-    make_video(terminal_state_frames, f'media/videos/{env_name}_{episode_idx}_terminal_states')
+    combined_frames = [np.concatenate([frames[i], terminal_state_frames[i]], axis=1) for i in range(len(frames))]
+
+    # make_video(terminal_state_frames, f'media/videos/{env_name}_{episode_idx}_terminal_states')
     # make_video(frames, f'media/videos/{env_name}_{episode_idx}')
+    make_video(combined_frames, f'media/videos/{env_name}_{episode_idx}_combined')
     print(f"Episode {episode_idx} took {time.time() - t} seconds")
 
 print("Done")

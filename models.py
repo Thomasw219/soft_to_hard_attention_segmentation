@@ -575,7 +575,9 @@ class RLSegmentationModel(FullPrototypeModel):
         # gru_hidden = torch.zeros(batch_size, self.cfg.segmentation_transformer_dim, device=device, dtype=torch.float32)
         gru_hidden = self.gru_init(transformed_segmentation_encodings[:, 0, :])
         for i in range(1, seq_len):
-            gru_hidden = self.segmentation_gru(torch.cat([segmentation_post_probs[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
+            # gru_hidden = self.segmentation_gru(torch.cat([segmentation_post_probs[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
+            # Autoregress with segmentation samples not probs
+            gru_hidden = self.segmentation_gru(torch.cat([segmentation_samples[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
             segmentation_post_logit = self.segmentation_post(gru_hidden)
             if segmentation_post_logit.requires_grad:
                 segmentation_post_logit.retain_grad()
