@@ -1,0 +1,23 @@
+log_dir: 'logs/moving_mnist'
+model_load_path: null
+name: 'debug'
+device: 'cuda:1'
+log_every: 100
+viz_every: 100
+np_seed: 0
+
+epochs: 1600
+
+train_dataset: {train : True, deterministic : False}
+test_dataset: {train : False, deterministic : False}
+
+dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
+
+temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.50, min_temp: 0.50}
+# temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 400}
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.10, start_step: 0, end_step: 1}
+# state_kl_weight_scheduler: {type: 'linear', start_value: 0.05, end_value: 0.05, start_step: 0, end_step: 100}
+
+defaults:
+  - model: full_prototype_v1
+  - optimizer: default_optimizer

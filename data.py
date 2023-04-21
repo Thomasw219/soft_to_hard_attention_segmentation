@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 import torch
-# from torchvision import datasets, transforms
+from torchvision import datasets, transforms
 import gym
 import d4rl
 
@@ -250,8 +250,8 @@ class StochasticMovingMNIST(object):
 
     """Data Handler that creates Bouncing MNIST dataset on the fly."""
 
-    def __init__(self, train, data_root='./data/moving_mnist',
-                    obs_len=20, num_digits=2, context_len=10, image_size=64, deterministic=True, img_transforms=None):
+    def __init__(self, train=True, data_root='./data/moving_mnist',
+                    obs_len=100, num_digits=2, context_len=10, image_size=64, deterministic=True, img_transforms=None, channel_first=True):
         path = data_root
         self.seq_len = obs_len + context_len
         self.context_len = context_len
@@ -264,6 +264,7 @@ class StochasticMovingMNIST(object):
         self.seed_is_set = False # multi threaded loading
         self.channels = 1
         self.transforms = img_transforms
+        self.channel_first = channel_first
 
         self.data = datasets.MNIST(
             path,
@@ -291,6 +292,7 @@ class StochasticMovingMNIST(object):
                       image_size,
                       self.channels),
                     dtype=np.float32)
+        c = np.zeros((self.seq_len, 2 * self.num_digits), dtype=np.float32)
         for n in range(self.num_digits):
             idx = np.random.randint(self.N)
             digit, _ = self.data[idx]
@@ -331,13 +333,17 @@ class StochasticMovingMNIST(object):
                         dy = np.random.randint(-4, 5)
 
                 x[t, sy:sy+32, sx:sx+32, 0] += digit.numpy().squeeze()
+                c[t, 2 * n] = sx
+                c[t, 2 * n + 1] = sy
                 sy += dy
                 sx += dx
 
         x[x>1] = 1.
         if self.transforms is not None:
             x = self.transforms(x)
-        return x[self.context_len:], x[:self.context_len]
+        if self.channel_first:
+            x = x.transpose(0, 3, 1, 2)
+        return x[self.context_len:], x[:self.context_len], c[self.context_len:], c[:self.context_len]
 
 def test_fixed_size_piecewise_sine():
     dataset = FixedSizePiecewiseSine()

@@ -543,6 +543,269 @@ class FullPrototypeModel(nn.Module):
         self.hard_sample()
         super().eval()
 
+class VideoSegmentationModel(FullPrototypeModel):
+    def __init__(self, cfg, img_shape, max_seq_len):
+        super().__init__(cfg, 1, max_seq_len)
+        self.img_shape = img_shape
+        self.encoder = CNNEncoder(img_shape)
+        self.encoding_dim = self.encoder.get_output_dim()
+        self.decoder = CNNDecoder(self.state_rep_dim + self.abstract_rep_dim, img_shape)
+
+        self.context_gru = nn.GRU(self.encoding_dim, self.cfg.context_gru_hidden, batch_first=True)
+        self.gru_init = StandardMLP(input_dim=self.cfg.context_gru_hidden, layer_sizes=[256, 256], output_dim=self.cfg.segmentation_transformer_dim)
+        self.abstract_init = StandardMLP(input_dim=self.cfg.context_gru_hidden, layer_sizes=[256, 256], output_dim=self.cfg.abstract_rep_stoch_dim)
+
+    def forward(self, context, frames, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0):
+        # traj is a tensor of shape (batch_size, seq_len, data_dim)
+        traj = frames
+        batch_size = traj.shape[0]
+        seq_len = traj.shape[1]
+        context_len = context.shape[1]
+        device = traj.device
+        assert seq_len <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
+
+        encodings = self.encoder(traj.reshape(batch_size * seq_len, *self.img_shape))
+        encodings = encodings.reshape(batch_size, seq_len, self.encoding_dim)
+
+        context_encodings, _ = self.context_gru(self.encoder(context.reshape(batch_size * context_len, *self.img_shape)).reshape(batch_size, context_len, self.encoding_dim))
+        context_encodings = context_encodings[:, -1, :]
+
+        segmentation_encodings = self.segmentation_mlp_encoder(encodings)
+        transformed_segmentation_encodings = self.segmentation_transformer_encoder(torch.transpose(segmentation_encodings, 0, 1)).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
+        segmentation_post_logits = []
+        segmentation_post_probs = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
+        segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
+        y_samples = []
+        gru_hidden = self.gru_init(context_encodings)
+        for i in range(1, seq_len):
+            # gru_hidden = self.segmentation_gru(torch.cat([segmentation_post_probs[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
+            # Autoregress with segmentation samples not probs
+            gru_hidden = self.segmentation_gru(torch.cat([segmentation_samples[-1], transformed_segmentation_encodings[:, i, :]], dim=-1), gru_hidden)
+            segmentation_post_logit = self.segmentation_post(gru_hidden)
+            if segmentation_post_logit.requires_grad:
+                segmentation_post_logit.retain_grad()
+            segmentation_sample, y_sample = concrete.sample_binary_concrete(segmentation_post_logit, self.temperature, hard=self.sample)
+            segmentation_post_probs.append(torch.sigmoid(segmentation_post_logit))
+            segmentation_post_logits.append(segmentation_post_logit)
+            if self.cfg['fix_segmentation_period'] is None:
+                segmentation_samples.append(segmentation_sample)
+            else:
+                if i % self.cfg['fix_segmentation_period'] == 0:
+                    segmentation_samples.append(torch.ones_like(segmentation_sample))
+                else:
+                    segmentation_samples.append(torch.zeros_like(segmentation_sample))
+            y_samples.append(y_sample)
+
+        segmentation_post_logit_list = segmentation_post_logits
+        segmentation_post_logits = torch.stack(segmentation_post_logits, dim=1)
+        segmentation_samples = torch.stack(segmentation_samples, dim=1)
+        y_samples = torch.stack(y_samples, dim=1)
+
+        segmentation_samples = segmentation_samples.squeeze(-1)
+        if segmentation_samples.requires_grad:
+            segmentation_samples.register_hook(lambda grad: self.cfg.time_grad_scalar * grad)
+        if segmentation_samples.requires_grad:
+            segmentation_samples.retain_grad()
+        segment_weights, _, causal_segmentation_attention_mask, _ = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
+
+        # query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
+        query_encodings = self.query_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
+        repeated_query_encodings = torch.cat([query_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.query_attention_dim)
+        attended_query_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_query_encodings, dim=2)
+        abstract_rep_post_params = self.abstract_rep_post(attended_query_encodings)
+        abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
+        abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples, std_scalar=abstract_sample_std_scalar)
+
+        abstract_init = self.abstract_init(context_encodings.unsqueeze(1))
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_stoch_samples, 1, fill=abstract_init))
+        abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
+        abstract_rep = abstract_rep_stoch_samples
+
+        state_rep_post_params = self.state_rep_post(torch.cat([encodings, abstract_rep], dim=-1))
+        state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
+        state_rep_stoch_samples = self.reparameterize(state_rep_post_means, state_rep_post_stds, std_scalar=state_sample_std_scalar)
+
+        state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_rep_stoch_samples, abstract_rep], dim=-1))
+        transformed_state_rep_encodings = self.state_rep_transformer_encoder(torch.transpose(state_rep_encodings, 0, 1), mask=causal_segmentation_attention_mask).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
+        state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
+        state_rep_prior_params = self.state_rep_prior(torch.cat([shift_forward(state_rep_deter, 1) * (1 - segmentation_samples).unsqueeze(-1), abstract_rep], dim=-1))
+        state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
+        state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
+
+        decoder_input = torch.cat([state_rep, abstract_rep], dim=-1)
+        segmentation_prior_logits = self.segmentation_prior(decoder_input)[:, :-1]
+        reconstructed_traj = self.decoder(decoder_input.reshape(batch_size * seq_len, -1)).reshape(batch_size, seq_len, *self.img_shape)
+
+        return reconstructed_traj, dict(
+            segment_weights=segment_weights,
+            segmentation_post_logits=segmentation_post_logits,
+            segmentation_post_logit_list=segmentation_post_logit_list,
+            segmentation_samples=segmentation_samples,
+            y_samples=y_samples,
+            abstract_rep_post_means=abstract_rep_post_means,
+            abstract_rep_post_stds=abstract_rep_post_stds,
+            abstract_rep_prior_means=abstract_rep_prior_means,
+            abstract_rep_prior_stds=abstract_rep_prior_stds,
+            abstract_rep=abstract_rep,
+            state_rep_post_means=state_rep_post_means,
+            state_rep_post_stds=state_rep_post_stds,
+            state_rep_prior_means=state_rep_prior_means,
+            state_rep_prior_stds=state_rep_prior_stds,
+            state_rep=state_rep,
+            segmentation_prior_logits=segmentation_prior_logits,
+        )
+
+    def generate(self, context, abstract_sample_std_scalar=1, state_sample_std_scalar=1, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None, initial_stoch=None):
+        device = self.positional_encoding.device
+        batch_size = context.shape[0]
+        if generation_length is None:
+            generation_length = self.max_seq_len
+
+        segmentation_probs = torch.zeros(batch_size, generation_length, device=device, dtype=torch.float32)
+        segmentations = torch.zeros(batch_size, generation_length, device=device, dtype=torch.float32)
+        segmentation_probs[:, 0] = 1
+        segmentations[:, 0] = 1
+        if given_segmentations is not None:
+            segmentations = given_segmentations
+
+        # abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
+        abstract_rep = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
+        if given_abstract_stoch is not None:
+            abstract_rep[..., :self.cfg.abstract_rep_stoch_dim] = given_abstract_stoch
+
+        context_len = context.shape[1]
+        context_encodings, _ = self.context_gru(self.encoder(context.reshape(batch_size * context_len, *self.img_shape)).reshape(batch_size, context_len, self.encoding_dim))
+        context_encodings = context_encodings[:, -1, :]
+        abstract_init = self.abstract_init(context_encodings.unsqueeze(1))
+
+        state_rep = torch.zeros(batch_size, generation_length, self.state_rep_dim, device=device, dtype=torch.float32)
+        if given_state_stoch is not None:
+            state_rep[..., :self.cfg.state_rep_stoch_dim] = given_state_stoch
+
+        generated_traj = torch.zeros(batch_size, generation_length, self.data_dim, device=device, dtype=torch.float32)
+
+        abstract_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
+        state_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.state_rep_stoch_dim, device=device, dtype=torch.float32)
+
+        abstract_eps = torch.randn(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
+        abstract_seg_eps = torch.zeros_like(abstract_eps)
+
+        for i in range(generation_length):
+            # abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1, -self.cfg.abstract_rep_deter_dim:], 1)[:, -1:])
+            abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1], 1, fill=abstract_init)[:, -1:])
+            abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
+            segment = segmentations[:, i:i + 1].unsqueeze(-1)
+            if given_abstract_stoch is None:
+                if i == 0:
+                    abstract_seg_eps[:, i:i + 1] = abstract_eps[:, i:i + 1]
+                    if initial_stoch is None:
+                        abstract_rep_stoch_samples = abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar
+                    else:
+                        abstract_rep_stoch_samples = initial_stoch
+                else:
+                    abstract_seg_eps[:, i:i + 1] = (1 - segment) * abstract_seg_eps[:, i - 1:i] + segment * abstract_eps[:, i:i + 1]
+                    abstract_rep_stoch_samples = (1 - segment) * abstract_rep[:, i - 1:i, :self.cfg.abstract_rep_stoch_dim] + segment * (abstract_rep_prior_means + abstract_rep_prior_stds * abstract_seg_eps[:, i:i + 1] * abstract_sample_std_scalar)
+                abstract_rep[:, i:i + 1, :self.cfg.abstract_rep_stoch_dim] = abstract_rep_stoch_samples
+            abstract_stoch_means[:, i:i + 1] = abstract_rep_prior_means
+
+            segmentation_samples = segmentations[:, :i + 1]
+            _, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
+
+            # abstract_stoch_hist = abstract_rep[:, :i + 1, :self.cfg.abstract_rep_stoch_dim]
+            # abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_stoch_hist, broadcast_positional_encoding[:, :i + 1]], dim=-1))
+            # transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_stoch_hist, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+            # abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
+            # abstract_rep[:, i:i + 1, -self.cfg.abstract_rep_deter_dim:] = abstract_rep_deter[:, -1:]
+
+            state_rep_prior_params = self.state_rep_prior(torch.cat([(shift_forward(state_rep[:, :i + 1, -self.cfg.state_rep_deter_dim:], 1))[:, -1:] * (1 - segmentation_samples[:, -1:]).unsqueeze(-1), abstract_rep[:, i:i + 1]], dim=-1))
+            state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
+            if given_state_stoch is None:
+                state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * torch.randn_like(state_rep_prior_means) * state_sample_std_scalar
+                state_rep[:, i:i + 1, :self.cfg.state_rep_stoch_dim] = state_rep_stoch
+            state_stoch_means[:, i:i + 1] = state_rep_prior_means
+
+            state_stoch_hist = state_rep[:, :i + 1, :self.cfg.state_rep_stoch_dim]
+            abstract_rep_hist = abstract_rep[:, :i + 1]
+            state_rep_encodings = self.state_rep_mlp_encoder(torch.cat([state_stoch_hist, abstract_rep_hist], dim=-1))
+            transformed_state_rep_encodings = self.state_rep_transformer_encoder(torch.transpose(state_rep_encodings, 0, 1), mask=causal_segmentation_attention_mask).transpose(0, 1)
+            state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
+            state_rep[:, i:i + 1, -self.cfg.state_rep_deter_dim:] = state_rep_deter[:, -1:]
+
+            decoder_input = torch.cat([state_rep[:, i:i + 1], abstract_rep[:, i:i + 1]], dim=-1)
+            # generated_traj[:, i:i + 1] = self.decoder(decoder_input)
+
+            if i < generation_length - 1:
+                segmentation_prior_logits = self.segmentation_prior(decoder_input)
+                segmentation_samples = torch.distributions.Bernoulli(logits=segmentation_prior_logits).sample().squeeze(-1)
+                segmentation_probs[:, i + 1:i + 2] = torch.sigmoid(segmentation_prior_logits).squeeze(-1)
+                if given_segmentations is None:
+                    if self.cfg['fix_segmentation_period'] is None:
+                        segmentations[:, i + 1:i + 2] = segmentation_samples
+                    else:
+                        if (i + 1) % self.cfg['fix_segmentation_period'] == 0:
+                            segmentations[:, i + 1:i + 2] = torch.ones_like(segmentation_samples)
+                        else:
+                            segmentations[:, i + 1:i + 2] = torch.zeros_like(segmentation_samples)
+
+        generated_traj = self.decoder(torch.cat([state_rep, abstract_rep], dim=-1).reshape(batch_size * generation_length, -1)).reshape(batch_size, generation_length, *self.img_shape)
+
+        return generated_traj, dict(
+            abstract_rep=abstract_rep,
+            state_rep=state_rep,
+            segmentation_samples=segmentations,
+            segmentation_probs=segmentation_probs,
+            abstract_stoch_means=abstract_stoch_means,
+            state_stoch_means=state_stoch_means,
+        )
+
+    def get_loss(self, context, frames):
+        reconstructed_frames, info = self.forward(context, frames)
+        info['reconstructed_frames'] = reconstructed_frames
+        info['ground_truth_frames'] = frames
+        reconstruction_loss = nn.functional.mse_loss(frames, reconstructed_frames)
+        segmentation_samples = info['segmentation_samples']
+        average_compression = 1 / torch.mean(segmentation_samples[:, 1:])
+
+        abstract_rep_post_means, abstract_rep_post_stds = info['abstract_rep_post_means'], info['abstract_rep_post_stds']
+        abstract_rep_prior_means, abstract_rep_prior_stds = info['abstract_rep_prior_means'], info['abstract_rep_prior_stds']
+        # abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
+
+        # TODO: Don't include time loss factor into KL loss, keep them factorized
+        # abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
+        abs_kl = self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)
+        abstract_rep_kl_loss = torch.mean(torch.sum(abs_kl * segmentation_samples.detach(), dim=1) / torch.sum(segmentation_samples, dim=1))
+
+        state_rep_post_means, state_rep_post_stds = info['state_rep_post_means'], info['state_rep_post_stds']
+        state_rep_prior_means, state_rep_prior_stds = info['state_rep_prior_means'], info['state_rep_prior_stds']
+
+        state_kl = self.kl_balance_gaussian(state_rep_prior_means, state_rep_prior_stds, state_rep_post_means, state_rep_post_stds, self.cfg.state_kl_balance)
+        state_rep_kl_loss = torch.mean(state_kl)
+        info['state_kl'] = state_kl
+
+        segmentation_post_logits = info['segmentation_post_logits']
+        segmentation_prior_logits = info['segmentation_prior_logits']
+        segmentation_loss = torch.sigmoid(segmentation_post_logits).mean()
+        temp = torch.tensor(self.temperature, device=segmentation_post_logits.device)
+        segmentation_kl_loss = torch.mean(concrete.y_kl_divergence(info['y_samples'], segmentation_prior_logits, temp, segmentation_post_logits, temp, kl_balance=self.cfg.segmentation_kl_balance))
+
+        model_loss = self.cfg.reconstruction_loss_weight * reconstruction_loss + \
+            self.time_loss_weight * segmentation_loss + \
+            self.cfg.abstract_transition_kl_weight * abstract_rep_kl_loss + \
+            self.state_kl_weight * state_rep_kl_loss + \
+            self.cfg.segmentation_kl_weight * segmentation_kl_loss
+
+        metrics = dict(
+            loss=model_loss.item(),
+            reconstruction_loss=reconstruction_loss.item(),
+            segmentation_loss=segmentation_loss.item(),
+            average_compression=torch.minimum(average_compression, torch.tensor(self.max_seq_len, device=average_compression.device)).item(),
+            abstract_transition_kl_loss=abstract_rep_kl_loss.item(),
+            state_transition_kl_loss=state_rep_kl_loss.item(),
+            segmentation_kl_loss=segmentation_kl_loss.item(),
+        )
+
+        return model_loss, metrics, info
+
 class RLSegmentationModel(FullPrototypeModel):
     def __init__(self, cfg, obs_dim, action_dim, max_seq_len):
         super().__init__(cfg, obs_dim + action_dim, max_seq_len)
@@ -744,6 +1007,58 @@ class StandardMLP(nn.Module):
 
     def forward(self, x):
         return self.network.forward(x)
+
+class CNNEncoder(nn.Module):
+    def __init__(self, img_shape):
+        super().__init__()
+        self.img_shape = img_shape
+
+        self.feature = nn.Sequential(
+            nn.Conv2d(img_shape[0], 32, 4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        x = self.feature(x)
+        x = x.reshape(x.shape[0], -1)
+        return x
+
+    def get_output_dim(self):
+        return 1024
+
+class CNNDecoder(nn.Module):
+    def __init__(self, feat_dim, img_shape):
+        super().__init__()
+        self.feat_dim = feat_dim
+        self.img_shape = img_shape
+
+        self.linear = nn.Linear(feat_dim, 1024)
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(1024, 128, 5, stride=2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, 5, stride=2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 6, stride=2),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, img_shape[0], 6, stride=2)
+        )
+
+    def forward(self, x):
+        x = self.linear(x)
+        x = x.reshape(x.shape[0], -1, 1, 1)
+        mean = self.decoder(x)
+        return mean
+
+    def get_mse(self, feats, batch_obs):
+        mean = self.forward(feats)
+        loss = nn.MSELoss()(mean, batch_obs)
+        return loss
 
 def get_sinusoidal_positional_encoding(dim, max_len):
     position = torch.arange(max_len).unsqueeze(1)

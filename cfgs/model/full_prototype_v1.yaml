@@ -1,5 +1,5 @@
-reconstruction_loss_weight: 1.0
-abstract_transition_kl_weight: 0.0001
+reconstruction_loss_weight: 10.0
+abstract_transition_kl_weight: 0.00001
 abstract_kl_balance: 0.8
 state_transition_kl_weight: 0.01
 state_kl_balance: 0.8
@@ -10,14 +10,16 @@ init_temperature: 1.0 # Handled by scheduler
 time_grad_scalar: 1
 
 encoder_params: {layer_sizes: [], activate_last: False, activation: 'elu'}
-encoding_dim: 32
+encoding_dim: 1024
 
 positional_encoding_type: 'learned'
-positional_encoding_dim: 128
+positional_encoding_dim: 1024
 positional_encoding_dropout: 0.0
 
 # null for learned segmentations
 fix_segmentation_period: null
+
+context_gru_hidden: 128
 
 segmentation_transformer_dim: 256
 segmentation_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
@@ -32,7 +34,7 @@ query_dim: 256
 query_mlp_decoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 
 abstract_rep_stoch_dim: 128
-abstract_rep_deter_dim: 16
+abstract_rep_deter_dim: 64
 compression_transformer_dim: 64
 compression_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 compression_transformer_encoder_layer_params: {nhead: 4, dim_feedforward: 256, batch_first: True, dropout: 0.0}
@@ -47,8 +49,8 @@ abstract_rep_mlp_decoder_params: {layer_sizes: [256], activate_last: False, acti
 
 abstract_rep_prior_params: {layer_sizes: [256, 256], activate_last: False, activation: 'elu'}
 
-state_rep_stoch_dim: 2
-state_rep_deter_dim: 2
+state_rep_stoch_dim: 16
+state_rep_deter_dim: 16
 state_rep_post_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}
 
 state_rep_mlp_encoder_params: {layer_sizes: [256], activate_last: False, activation: 'elu'}

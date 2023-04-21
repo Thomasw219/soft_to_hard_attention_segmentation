@@ -28,3 +28,4 @@ CMD . ./render_start.sh
 
 # Add color to shell prompt
 RUN echo "PS1='${debian_chroot:+($debian_chroot)}\[\033[0;36m\]docker@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '" >> ~/.bashrc
+
