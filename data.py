@@ -251,7 +251,7 @@ class StochasticMovingMNIST(object):
     """Data Handler that creates Bouncing MNIST dataset on the fly."""
 
     def __init__(self, train=True, data_root='./data/moving_mnist',
-                    obs_len=100, num_digits=2, context_len=10, image_size=64, deterministic=True, img_transforms=None, channel_first=True):
+                    obs_len=64, num_digits=2, context_len=10, image_size=64, deterministic=True, img_transforms=None, channel_first=True):
         path = data_root
         self.seq_len = obs_len + context_len
         self.context_len = context_len

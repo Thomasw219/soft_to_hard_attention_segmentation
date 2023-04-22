@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from data import StochasticMovingMNIST as Dataset
-from models import VideoSegmentationModel
+from models import FrozenPosteriorVideoSegmentationModel
 from utils import make_scheduler
 
 @hydra.main(version_base='1.3', config_path='cfgs', config_name='moving_mnist_experiment')
@@ -26,7 +26,7 @@ def test_full_prototype(cfg):
     test_dataset = Dataset(**cfg['test_dataset'])
     test_dataloader = DataLoader(test_dataset, **cfg['dataloader'])
 
-    model = VideoSegmentationModel(cfg['model'], img_shape=(1, 64, 64), max_seq_len=64)
+    model = FrozenPosteriorVideoSegmentationModel(cfg['model'], img_shape=(1, 64, 64), max_seq_len=64)
     model.to(cfg['device'])
 
     if cfg['model_load_path'] is not None:
@@ -51,9 +51,6 @@ def test_full_prototype(cfg):
         temp = temp_scheduler.get_value(global_step)
         model.set_temperature(temp)
         logger.add_scalar('train/temp', temp, global_step)
-        time_loss_weight = time_loss_weight_scheduler.get_value(epoch)
-        model.set_time_loss_weight(time_loss_weight)
-        logger.add_scalar('train/time_loss_weight', time_loss_weight, global_step)
         # state_kl_weight = state_kl_weight_scheduler.get_value(epoch)
         # model.set_state_kl_weight(state_kl_weight)
         # logger.add_scalar('train/state_kl_weight', state_kl_weight, global_step)
@@ -63,6 +60,9 @@ def test_full_prototype(cfg):
             context = context.to(device=cfg['device'], dtype=torch.float32)
             frames = frames.to(device=cfg['device'], dtype=torch.float32)
             global_step = i + epoch * epoch_steps
+
+            time_loss_weight = time_loss_weight_scheduler.get_value(global_step)
+            model.set_time_loss_weight(time_loss_weight)
 
             optimizer.zero_grad()
             loss, metrics, info = model.get_loss(context, frames)
@@ -81,6 +81,7 @@ def test_full_prototype(cfg):
                 train_metrics = {f'train/{k}' : v for k, v in metrics.items()}
                 for k, v in train_metrics.items():
                     logger.add_scalar(k, v, global_step)
+                logger.add_scalar('train/time_loss_weight', time_loss_weight, global_step)
 
             if global_step % cfg['viz_every'] == 0:
                 visualize(info, frame_coords, logger, global_step, prefix='train')
@@ -105,10 +106,14 @@ def test_full_prototype(cfg):
             if metrics['test/loss'] < best_test_loss:
                 best_test_loss = metrics['test/loss']
                 torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_model.pt'))
-                torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'full_model.pt'))
+                torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_full_model.pt'))
 
             visualize(info, frame_coords, logger, global_step, prefix='test')
             visualize_generations(model, context, logger, global_step, prefix='test')
+
+
+            torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_model.pt'))
+            torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_full_model.pt'))
 
 def get_optimizer(cfg, model):
     if cfg['type'] == 'adam':
@@ -175,6 +180,7 @@ def visualize_generations(model, context, logger, global_step, n_samples=3, pref
 
     logger.add_figure(prefix + '/generation_segmentation_prob', segmentation_prob_fig, global_step)
     logger.add_video(prefix + '/generated', torch.clamp(generated_trajs[0:1], 0, 1), global_step)
+    logger.add_video(prefix + '/generated_context', torch.clamp(context[0:1], 0, 1), global_step)
 
     segmentation_prob_fig.clf()
 
