@@ -4,6 +4,8 @@ from torch.nn.modules.linear import Linear
 from love.modules import *
 from love.utils import gumbel_sampling, concat, log_density_concrete
 
+from models import CNNEncoder, CNNDecoder, StandardMLP
+
 
 class HierarchicalStateSpaceModel(nn.Module):
     def __init__(self,
@@ -12,7 +14,8 @@ class HierarchicalStateSpaceModel(nn.Module):
                  num_layers,
                  max_seg_len,
                  max_seg_num,
-                 latent_n=10):
+                 latent_n=10,
+                 use_min_boundary_length=False,):
         super(HierarchicalStateSpaceModel, self).__init__()
         ################
         # network size #
@@ -41,9 +44,11 @@ class HierarchicalStateSpaceModel(nn.Module):
         #################################
         # observation encoder / decoder #
         #################################
-        self.enc_obs = Encoder1D(feat_size=1, output_size=self.obs_feat_size)
-        self.dec_obs = Decoder1D(input_size=self.obs_feat_size,
-                               feat_size=1)
+        # self.enc_obs = Encoder(feat_size=self.feat_size)
+        # self.dec_obs = Decoder(input_size=self.obs_feat_size,
+        #                        feat_size=self.feat_size)
+        self.enc_obs = nn.Sequential(CNNEncoder((1, 64, 64)), StandardMLP(input_dim=1024, layer_sizes=[256, 256], output_dim=self.feat_size))
+        self.dec_obs = CNNDecoder(feat_dim=self.feat_size, img_shape=(1, 64, 64))
 
         #####################
         # boundary detector #
@@ -113,6 +118,8 @@ class HierarchicalStateSpaceModel(nn.Module):
 
         self.z_embedding = LinearLayer(input_size=latent_n, output_size=self.abs_state_size)
 
+        self._use_min_boundary_length = use_min_boundary_length
+
     # sampler
     def boundary_sampler(self, log_alpha):
         # sample and return corresponding logit
@@ -163,7 +170,7 @@ class HierarchicalStateSpaceModel(nn.Module):
 
         # for each step
         new_log_alpha_list = []
-        for t in range(seq_len - 1):
+        for t in range(seq_len):
             ##########################
             # (0) get length / count #
             ##########################
@@ -202,7 +209,8 @@ class HierarchicalStateSpaceModel(nn.Module):
         #######################
         # observation encoder #
         #######################
-        enc_obs_list = self.enc_obs(obs_data_list)
+        enc_obs_list = self.enc_obs(obs_data_list.view(-1, *obs_data_list.size()[2:]))
+        enc_obs_list = enc_obs_list.view(num_samples, full_seq_size, -1)  # [B, S, D]
 
         ######################
         # boundary sampling ##
@@ -215,6 +223,23 @@ class HierarchicalStateSpaceModel(nn.Module):
         post_boundary_log_alpha_list = self.post_boundary(shifted_enc_obs_list)
         # post_boundary_log_alpha_list = self.post_boundary(enc_obs_list)
         boundary_data_list, post_boundary_sample_logit_list = self.boundary_sampler(post_boundary_log_alpha_list)
+        boundary_data_list[:, :(init_size + 1), 0] = 1.0
+        boundary_data_list[:, :(init_size + 1), 1] = 0.0
+
+        if self._use_min_boundary_length:
+            mask = torch.ones_like(boundary_data_list)
+            for batch_idx in range(boundary_data_list.shape[0]):
+                reads = torch.where(boundary_data_list[batch_idx, :, 0] == 1)[0]
+                prev_read = reads[0]
+                for read in reads[1:]:
+                    if read - prev_read <= 2:
+                        mask[batch_idx][read] = 0
+                    else:
+                        prev_read = read
+
+            boundary_data_list = boundary_data_list * mask
+            boundary_data_list[:, :, 1] = 1 - boundary_data_list[:, :, 0]
+
         boundary_data_list[:, :(init_size + 1), 0] = 1.0
         boundary_data_list[:, :(init_size + 1), 1] = 0.0
         boundary_data_list[:, -init_size:, 0] = 1.0
@@ -322,18 +347,18 @@ class HierarchicalStateSpaceModel(nn.Module):
         # decode all together
         obs_rec_list = torch.stack(obs_rec_list, dim=1)
         obs_rec_list = self.dec_obs(obs_rec_list.view(num_samples * seq_size, -1))
-        obs_rec_list = obs_rec_list.view(num_samples, seq_size, *obs_rec_list.size()[-1:])
+        obs_rec_list = obs_rec_list.view(num_samples, seq_size, *obs_rec_list.size()[-3:])
 
         # stack results
         prior_boundary_log_alpha_list = torch.stack(prior_boundary_log_alpha_list, dim=1)
 
         # remove padding
         boundary_data_list = boundary_data_list[:, init_size:(init_size + seq_size)]
-        post_boundary_log_alpha_list = post_boundary_log_alpha_list[:, (init_size + 1):(init_size + 1 + seq_size)]
-        post_boundary_sample_logit_list = post_boundary_sample_logit_list[:, (init_size + 1):(init_size + 1 + seq_size)]
+        post_boundary_log_alpha_list = post_boundary_log_alpha_list[:, (init_size):(init_size + 1 + seq_size)]
+        post_boundary_sample_logit_list = post_boundary_sample_logit_list[:, (init_size):(init_size + 1 + seq_size)]
 
         # fix prior by constraints
-        prior_boundary_log_alpha_list = self.regularize_prior_boundary(prior_boundary_log_alpha_list[:, :-1],
+        prior_boundary_log_alpha_list = self.regularize_prior_boundary(prior_boundary_log_alpha_list,
                                                                        boundary_data_list)
 
         # compute log-density
@@ -401,6 +426,23 @@ class HierarchicalStateSpaceModel(nn.Module):
 
         for _ in range(n_sample):
             boundary_data_list, _ = self.boundary_sampler(post_boundary_log_alpha_list)
+            boundary_data_list[:, :(init_size + 1), 0] = 1.0
+            boundary_data_list[:, :(init_size + 1), 1] = 0.0
+
+            if self._use_min_boundary_length:
+                mask = torch.ones_like(boundary_data_list)
+                for batch_idx in range(boundary_data_list.shape[0]):
+                    reads = torch.where(boundary_data_list[batch_idx, :, 0] == 1)[0]
+                    prev_read = reads[0]
+                    for read in reads[1:]:
+                        if read - prev_read <= 2:
+                            mask[batch_idx][read] = 0
+                        else:
+                            prev_read = read
+
+                boundary_data_list = boundary_data_list * mask
+                boundary_data_list[:, :, 1] = 1 - boundary_data_list[:, :, 0]
+
             boundary_data_list[:, :(init_size + 1), 0] = 1.0
             boundary_data_list[:, :(init_size + 1), 1] = 0.0
             boundary_data_list[:, -init_size:, 0] = 1.0
@@ -568,7 +610,12 @@ class EnvModel(nn.Module):
                  num_layers,
                  max_seg_len,
                  max_seg_num,
+                 recon_loss_coeff=1.0,
+                 abs_pos_kl_coeff=1.0,
+                 obs_pos_kl_coeff=1.0,
+                 mask_kl_coeff=1.0,
                  use_abs_pos_kl=True,
+                 use_min_boundary_length=False,
                  coding_len_coeff=10.0):
         super(EnvModel, self).__init__()
         ################
@@ -582,6 +629,11 @@ class EnvModel(nn.Module):
         self.coding_len_coeff = coding_len_coeff
         self.use_abs_pos_kl = use_abs_pos_kl
 
+        self.recon_loss_coeff = recon_loss_coeff
+        self.abs_pos_kl_coeff = abs_pos_kl_coeff
+        self.obs_pos_kl_coeff = obs_pos_kl_coeff
+        self.mask_kl_coeff = mask_kl_coeff
+
         ###############
         # init models #
         ###############
@@ -590,7 +642,8 @@ class EnvModel(nn.Module):
                                                        state_size=self.state_size,
                                                        num_layers=self.num_layers,
                                                        max_seg_len=self.max_seg_len,
-                                                       max_seg_num=self.max_seg_num)
+                                                       max_seg_num=self.max_seg_num,
+                                                       use_min_boundary_length=use_min_boundary_length)
 
     def forward(self, obs_data_list, seq_size, init_size, obs_std=1.0):
         ############################
@@ -721,9 +774,9 @@ class EnvModel(nn.Module):
         encoding_length = self.state_model.encoding_cost(marginal, onehot_z_list, boundary_data_list.squeeze(-1))
 
         code_len_loss = encoding_length
-        loss = obs_cost.mean() + 0 * kl_abs_state_list.mean() + 0 * kl_obs_state_list.mean() + 0 * kl_mask_list.mean() + self.coding_len_coeff * code_len_loss
+        loss = self.recon_loss_coeff * obs_cost.mean() + self.abs_pos_kl_coeff * kl_abs_state_list.mean() + self.obs_pos_kl_coeff * kl_obs_state_list.mean() + self.mask_kl_coeff * kl_mask_list.mean() + self.coding_len_coeff * code_len_loss
 
-        info = {'reconstructed_traj': obs_rec_list,
+        info = {'reconstructed_traj': obs_rec_list[:, init_size:],
             'ground_truth_traj': obs_data_list,
             'mask_data': boundary_data_list,
             'encoding_length': encoding_length,

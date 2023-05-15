@@ -655,7 +655,7 @@ class VideoSegmentationModel(FullPrototypeModel):
             segmentation_prior_logits=segmentation_prior_logits,
         )
 
-    def generate(self, context, abstract_sample_std_scalar=1, state_sample_std_scalar=1, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None, initial_stoch=None):
+    def generate(self, context, abstract_sample_std_scalar=1, state_sample_std_scalar=1, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None, initial_stoch=None, given_abstract_eps=None, given_state_eps=None):
         device = self.positional_encoding.device
         batch_size = context.shape[0]
         if generation_length is None:
@@ -687,7 +687,14 @@ class VideoSegmentationModel(FullPrototypeModel):
         abstract_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
         state_stoch_means = torch.zeros(batch_size, generation_length, self.cfg.state_rep_stoch_dim, device=device, dtype=torch.float32)
 
-        abstract_eps = torch.randn(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
+        if given_abstract_eps is None:
+            abstract_eps = torch.randn(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
+        else:
+            abstract_eps = given_abstract_eps
+        if given_state_eps is None:
+            state_eps = torch.randn(batch_size, generation_length, self.cfg.state_rep_stoch_dim, device=device, dtype=torch.float32)
+        else:
+            state_eps = given_state_eps
         abstract_seg_eps = torch.zeros_like(abstract_eps)
 
         for i in range(generation_length):
@@ -720,7 +727,7 @@ class VideoSegmentationModel(FullPrototypeModel):
             state_rep_prior_params = self.state_rep_prior(torch.cat([(shift_forward(state_rep[:, :i + 1, -self.cfg.state_rep_deter_dim:], 1))[:, -1:] * (1 - segmentation_samples[:, -1:]).unsqueeze(-1), abstract_rep[:, i:i + 1]], dim=-1))
             state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
             if given_state_stoch is None:
-                state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * torch.randn_like(state_rep_prior_means) * state_sample_std_scalar
+                state_rep_stoch = state_rep_prior_means + state_rep_prior_stds * state_eps[:, i:i + 1] * state_sample_std_scalar
                 state_rep[:, i:i + 1, :self.cfg.state_rep_stoch_dim] = state_rep_stoch
             state_stoch_means[:, i:i + 1] = state_rep_prior_means
 
@@ -840,7 +847,7 @@ class FrozenPosteriorVideoSegmentationModel(VideoSegmentationModel):
         segmentation_post_probs = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         segmentation_samples = [torch.ones(batch_size, 1, device=device, dtype=torch.float32)]
         y_samples = []
-        segmentation_context_encodings = self.segmentation_context_gru(self.segmentation_encoder(context.reshape(batch_size * context_len, *self.img_shape)).reshape(batch_size, context_len, self.encoding_dim))
+        segmentation_context_encodings, _ = self.segmentation_context_gru(self.segmentation_encoder(context.reshape(batch_size * context_len, *self.img_shape)).reshape(batch_size, context_len, self.encoding_dim))
         segmentation_context_encodings = segmentation_context_encodings[:, -1, :]
         gru_hidden = self.gru_init(segmentation_context_encodings)
         for i in range(1, seq_len):
@@ -874,7 +881,7 @@ class FrozenPosteriorVideoSegmentationModel(VideoSegmentationModel):
         segment_weights, _, causal_segmentation_attention_mask, _ = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
         # query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
-        query_encodings = self.query_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
+        query_encodings = self.query_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings.detach()], dim=-1))
         repeated_query_encodings = torch.cat([query_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.query_attention_dim)
         attended_query_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_query_encodings, dim=2)
         abstract_rep_post_params = self.abstract_rep_post(attended_query_encodings)

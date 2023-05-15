@@ -1,0 +1,18 @@
+log_dir: 'logs/love_moving_mnist'
+model_load_path: null
+name: 'love'
+device: 'cuda:1'
+log_every: 100
+viz_every: 100
+np_seed: 0
+
+epochs: 4000
+
+train_dataset: {train : True, deterministic : False, num_digits : 1}
+test_dataset: {train : False, deterministic : False, num_digits : 1}
+
+dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
+
+defaults:
+  - optimizer: love_optimizer
+  - model: love

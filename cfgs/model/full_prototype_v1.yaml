@@ -1,9 +1,9 @@
 reconstruction_loss_weight: 10.0
-abstract_transition_kl_weight: 0.00003
+abstract_transition_kl_weight: 0.03 #0.0036 # 0.03
 abstract_kl_balance: 0.8
-state_transition_kl_weight: 0.05
+state_transition_kl_weight: 0.10
 state_kl_balance: 0.8
-segmentation_kl_weight: 0.003
+segmentation_kl_weight: 0.10
 segmentation_kl_balance: 0.8
 time_loss_weight: 0.0 # Handled by scheduler
 init_temperature: 1.0 # Handled by scheduler
@@ -17,7 +17,7 @@ positional_encoding_dim: 1024
 positional_encoding_dropout: 0.0
 
 # null for learned segmentations
-fix_segmentation_period: null
+fix_segmentation_period: 1 # null
 
 frozen_model_path: 'logs/moving_mnist/original_params_dont_work_04-21-2023_23-54-40/full_model.pt'
 context_gru_hidden: 128
