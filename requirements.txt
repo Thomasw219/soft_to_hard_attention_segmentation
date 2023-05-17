@@ -11,7 +11,7 @@ matplotlib==3.4
 glfw>=1.4.0
 numpy>=1.11
 Cython>=0.27.2
-imageio>=2.1.2
+imageio==2.27.0
 cffi>=1.10
 fasteners~=0.15
 
@@ -44,3 +44,4 @@ torchcde
 PyYAML
 tensorboard
 tqdm
+moviepy

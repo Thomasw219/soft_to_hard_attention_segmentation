@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from data import StochasticMovingMNIST as Dataset
-from models import FrozenPosteriorVideoSegmentationModel
+from models import VideoSegmentationModel
 from utils import make_scheduler
 
 @hydra.main(version_base='1.3', config_path='cfgs', config_name='moving_mnist_experiment')
@@ -26,7 +26,7 @@ def test_full_prototype(cfg):
     test_dataset = Dataset(**cfg['test_dataset'])
     test_dataloader = DataLoader(test_dataset, **cfg['dataloader'])
 
-    model = FrozenPosteriorVideoSegmentationModel(cfg['model'], img_shape=(1, 64, 64), max_seq_len=64)
+    model = VideoSegmentationModel(cfg['model'], img_shape=(1, 64, 64), max_seq_len=64)
     model.to(cfg['device'])
 
     if cfg['model_load_path'] is not None:
@@ -161,15 +161,18 @@ def visualize(info, frame_coords, logger, global_step, n_samples=3, prefix='trai
     logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
     logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
 
-    logger.add_video(prefix + '/ground_truth', info['ground_truth_frames'][0:1], global_step)
-    logger.add_video(prefix + '/reconstructed', torch.clamp(info['reconstructed_frames'][0:1], 0, 1), global_step)
+    logger.add_video(prefix + '/ground_truth', info['ground_truth_frames'][0:1].detach().cpu(), global_step)
+    logger.add_video(prefix + '/reconstructed', torch.clamp(info['reconstructed_frames'][0:1], 0, 1).detach().cpu(), global_step)
 
     plot_fig.clf()
     delta_t_fig.clf()
     delta_t_logit_fig.clf()
 
 def visualize_generations(model, context, logger, global_step, n_samples=3, prefix='test'):
-    generated_trajs, info = model.generate(context, generation_length=model.max_seq_len)
+    with torch.no_grad():
+        generated_trajs, info = model.generate(context, generation_length=model.max_seq_len)
+    generated_trajs = generated_trajs.detach().cpu()
+    context = context.detach().cpu()
     segmentation_prob_fig = plt.figure(1)
     for i in range(n_samples):
         segmentation_prob_ax = segmentation_prob_fig.add_subplot(n_samples, 1, i+1)

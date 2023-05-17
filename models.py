@@ -158,12 +158,6 @@ class FullPrototypeModel(nn.Module):
 
         self.encoder = StandardMLP(input_dim=data_dim, **cfg.encoder_params, output_dim=cfg.encoding_dim)
 
-        if cfg.positional_encoding_type == 'learned':
-            self.positional_encoding = nn.Parameter(torch.randn(1, max_seq_len, cfg.positional_encoding_dim))
-        elif cfg.positional_encoding_type == 'sinusoid':
-            self.positional_encoding = nn.Parameter(get_sinusoidal_positional_encoding(cfg.positional_encoding_dim, max_seq_len), requires_grad=False)
-        self.positional_encoding_dropout = nn.Dropout(p=cfg.positional_encoding_dropout)
-
         self.segmentation_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim, **cfg.segmentation_mlp_encoder_params, output_dim=cfg.segmentation_transformer_dim)
         segmentation_transformer_encoder_layer = rpr.TransformerEncoderLayerRPR(d_model=cfg.segmentation_transformer_dim, **cfg.segmentation_transformer_encoder_layer_params, er_len=max_seq_len)
         self.segmentation_transformer_encoder = rpr.TransformerEncoderRPR(segmentation_transformer_encoder_layer, **cfg.segmentation_transformer_encoder_params)
@@ -173,18 +167,17 @@ class FullPrototypeModel(nn.Module):
         self.query_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.segmentation_transformer_dim, **cfg.query_mlp_encoder_params, output_dim=cfg.query_attention_dim)
         self.abstract_rep_post = StandardMLP(input_dim=cfg.query_attention_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
-        # self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim + cfg.positional_encoding_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
-        # abstract_rep_transformer_encoder_layer = GivenQueryTransformerEncoderLayer(d_query=cfg.abstract_rep_stoch_dim, d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
-        # self.abstract_rep_transformer_encoder = GivenQueryTransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_params)
+        self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
+        abstract_rep_transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_transformer_encoder_layer_params)
+        self.abstract_rep_transformer_encoder = nn.TransformerEncoder(abstract_rep_transformer_encoder_layer, **cfg.abstract_rep_transformer_params)
         self.abstract_rep_transformer_nheads = cfg.abstract_rep_transformer_encoder_layer_params['nhead']
-        # self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
-        # self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
-        # self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
-        self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
-        self.abstract_rep_dim = cfg.abstract_rep_stoch_dim
+        self.abstract_rep_mlp_decoder = StandardMLP(input_dim=cfg.abstract_rep_transformer_dim, **cfg.abstract_rep_mlp_decoder_params, output_dim=cfg.abstract_rep_deter_dim)
+        self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_deter_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
+        self.abstract_rep_dim = cfg.abstract_rep_stoch_dim + cfg.abstract_rep_deter_dim
+        # self.abstract_rep_prior = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_prior_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
+        # self.abstract_rep_dim = cfg.abstract_rep_stoch_dim
 
         self.state_rep_post = StandardMLP(input_dim=cfg.encoding_dim + self.abstract_rep_dim, **cfg.state_rep_post_params, output_dim=cfg.state_rep_stoch_dim * 2)
-        self.state_rep_context_encoder = StandardMLP(input_dim=self.abstract_rep_dim, **cfg.state_rep_context_encoder_params, output_dim=cfg.state_rep_transformer_dim)
         self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim  + self.abstract_rep_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
         state_rep_transformer_encoder_layer = rpr.TransformerEncoderLayerRPR(d_model=cfg.state_rep_transformer_dim, **cfg.state_rep_transformer_encoder_layer_params, er_len=max_seq_len)
         self.state_rep_transformer_encoder = rpr.TransformerEncoderRPR(state_rep_transformer_encoder_layer, **cfg.state_rep_transformer_params)
@@ -193,9 +186,9 @@ class FullPrototypeModel(nn.Module):
         self.state_rep_prior = StandardMLP(input_dim=cfg.state_rep_deter_dim + self.abstract_rep_dim, **cfg.state_rep_prior_params, output_dim=cfg.state_rep_stoch_dim * 2)
         self.state_rep_dim = cfg.state_rep_stoch_dim + cfg.state_rep_deter_dim
 
-        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.segmentation_prior_params, output_dim=1)
+        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim, **cfg.segmentation_prior_params, output_dim=1)
 
-        self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim, **cfg.decoder_params, output_dim=data_dim)
+        self.decoder = StandardMLP(input_dim=self.state_rep_dim, **cfg.decoder_params, output_dim=data_dim)
 
     def forward(self, traj, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
@@ -549,11 +542,11 @@ class VideoSegmentationModel(FullPrototypeModel):
         self.img_shape = img_shape
         self.encoder = CNNEncoder(img_shape)
         self.encoding_dim = self.encoder.get_output_dim()
-        self.decoder = CNNDecoder(self.state_rep_dim + self.abstract_rep_dim, img_shape)
+        self.decoder = CNNDecoder(self.state_rep_dim, img_shape)
 
         self.context_gru = nn.GRU(self.encoding_dim, self.cfg.context_gru_hidden, batch_first=True)
         self.gru_init = StandardMLP(input_dim=self.cfg.context_gru_hidden, layer_sizes=[256, 256], output_dim=self.cfg.segmentation_transformer_dim)
-        self.abstract_init = StandardMLP(input_dim=self.cfg.context_gru_hidden, layer_sizes=[256, 256], output_dim=self.cfg.abstract_rep_stoch_dim)
+        self.abstract_init = StandardMLP(input_dim=self.cfg.context_gru_hidden, layer_sizes=[256, 256], output_dim=self.cfg.abstract_rep_deter_dim)
 
     def forward(self, context, frames, abstract_sample_std_scalar=1.0, state_sample_std_scalar=1.0):
         # traj is a tensor of shape (batch_size, seq_len, data_dim)
@@ -606,7 +599,7 @@ class VideoSegmentationModel(FullPrototypeModel):
             segmentation_samples.register_hook(lambda grad: self.cfg.time_grad_scalar * grad)
         if segmentation_samples.requires_grad:
             segmentation_samples.retain_grad()
-        segment_weights, _, causal_segmentation_attention_mask, _ = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
+        segment_weights, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
         # query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
         query_encodings = self.query_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
@@ -617,9 +610,12 @@ class VideoSegmentationModel(FullPrototypeModel):
         abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples, std_scalar=abstract_sample_std_scalar)
 
         abstract_init = self.abstract_init(context_encodings.unsqueeze(1))
-        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_stoch_samples, 1, fill=abstract_init))
+        abstract_rep_encodings = self.abstract_rep_mlp_encoder(abstract_rep_stoch_samples)
+        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+        abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1, fill=abstract_init))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
-        abstract_rep = abstract_rep_stoch_samples
+        abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
 
         state_rep_post_params = self.state_rep_post(torch.cat([encodings, abstract_rep], dim=-1))
         state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
@@ -632,7 +628,7 @@ class VideoSegmentationModel(FullPrototypeModel):
         state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
-        decoder_input = torch.cat([state_rep, abstract_rep], dim=-1)
+        decoder_input = torch.cat([state_rep], dim=-1)
         segmentation_prior_logits = self.segmentation_prior(decoder_input)[:, :-1]
         reconstructed_traj = self.decoder(decoder_input.reshape(batch_size * seq_len, -1)).reshape(batch_size, seq_len, *self.img_shape)
 
@@ -656,7 +652,7 @@ class VideoSegmentationModel(FullPrototypeModel):
         )
 
     def generate(self, context, abstract_sample_std_scalar=1, state_sample_std_scalar=1, generation_length=None, given_segmentations=None, given_abstract_stoch=None, given_state_stoch=None, initial_stoch=None, given_abstract_eps=None, given_state_eps=None):
-        device = self.positional_encoding.device
+        device = context.device
         batch_size = context.shape[0]
         if generation_length is None:
             generation_length = self.max_seq_len
@@ -668,8 +664,8 @@ class VideoSegmentationModel(FullPrototypeModel):
         if given_segmentations is not None:
             segmentations = given_segmentations
 
-        # abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
-        abstract_rep = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
+        abstract_rep = torch.zeros(batch_size, generation_length, self.abstract_rep_dim, device=device, dtype=torch.float32)
+        # abstract_rep = torch.zeros(batch_size, generation_length, self.cfg.abstract_rep_stoch_dim, device=device, dtype=torch.float32)
         if given_abstract_stoch is not None:
             abstract_rep[..., :self.cfg.abstract_rep_stoch_dim] = given_abstract_stoch
 
@@ -698,8 +694,8 @@ class VideoSegmentationModel(FullPrototypeModel):
         abstract_seg_eps = torch.zeros_like(abstract_eps)
 
         for i in range(generation_length):
-            # abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1, -self.cfg.abstract_rep_deter_dim:], 1)[:, -1:])
-            abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1], 1, fill=abstract_init)[:, -1:])
+            abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1, -self.cfg.abstract_rep_deter_dim:], 1, fill=abstract_init)[:, -1:])
+            # abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep[:, :i + 1], 1, fill=abstract_init)[:, -1:])
             abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
             segment = segmentations[:, i:i + 1].unsqueeze(-1)
             if given_abstract_stoch is None:
@@ -718,11 +714,11 @@ class VideoSegmentationModel(FullPrototypeModel):
             segmentation_samples = segmentations[:, :i + 1]
             _, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
-            # abstract_stoch_hist = abstract_rep[:, :i + 1, :self.cfg.abstract_rep_stoch_dim]
-            # abstract_rep_encodings = self.abstract_rep_mlp_encoder(torch.cat([abstract_stoch_hist, broadcast_positional_encoding[:, :i + 1]], dim=-1))
-            # transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_stoch_hist, abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
-            # abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
-            # abstract_rep[:, i:i + 1, -self.cfg.abstract_rep_deter_dim:] = abstract_rep_deter[:, -1:]
+            abstract_stoch_hist = abstract_rep[:, :i + 1, :self.cfg.abstract_rep_stoch_dim]
+            abstract_rep_encodings = self.abstract_rep_mlp_encoder(abstract_stoch_hist)
+            transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+            abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
+            abstract_rep[:, i:i + 1, -self.cfg.abstract_rep_deter_dim:] = abstract_rep_deter[:, -1:]
 
             state_rep_prior_params = self.state_rep_prior(torch.cat([(shift_forward(state_rep[:, :i + 1, -self.cfg.state_rep_deter_dim:], 1))[:, -1:] * (1 - segmentation_samples[:, -1:]).unsqueeze(-1), abstract_rep[:, i:i + 1]], dim=-1))
             state_rep_prior_means, state_rep_prior_stds = state_rep_prior_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_prior_params[..., self.cfg.state_rep_stoch_dim:])
@@ -738,7 +734,7 @@ class VideoSegmentationModel(FullPrototypeModel):
             state_rep_deter = self.state_rep_mlp_decoder(transformed_state_rep_encodings)
             state_rep[:, i:i + 1, -self.cfg.state_rep_deter_dim:] = state_rep_deter[:, -1:]
 
-            decoder_input = torch.cat([state_rep[:, i:i + 1], abstract_rep[:, i:i + 1]], dim=-1)
+            decoder_input = torch.cat([state_rep[:, i:i + 1]], dim=-1)
             # generated_traj[:, i:i + 1] = self.decoder(decoder_input)
 
             if i < generation_length - 1:
@@ -754,7 +750,7 @@ class VideoSegmentationModel(FullPrototypeModel):
                         else:
                             segmentations[:, i + 1:i + 2] = torch.zeros_like(segmentation_samples)
 
-        generated_traj = self.decoder(torch.cat([state_rep, abstract_rep], dim=-1).reshape(batch_size * generation_length, -1)).reshape(batch_size, generation_length, *self.img_shape)
+        generated_traj = self.decoder(state_rep.reshape(batch_size * generation_length, -1)).reshape(batch_size, generation_length, *self.img_shape)
 
         return generated_traj, dict(
             abstract_rep=abstract_rep,
