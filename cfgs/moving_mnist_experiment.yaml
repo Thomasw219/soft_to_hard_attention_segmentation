@@ -1,4 +1,5 @@
 log_dir: 'logs/reconfigure_model'
+comet_project_name: 'moving_mnist_segmentation'
 # model_load_path: 'logs/moving_mnist/original_params_dont_work_04-21-2023_21-59-11/best_model.pt'
 # model_load_path: 'logs/frozen_seg_post/frozen_seg_post_04-22-2023_17-56-56/best_model.pt'
 # model_load_path: 'logs/frozen_seg_post/frozen_seg_post_04-22-2023_21-34-30/best_model.pt'
