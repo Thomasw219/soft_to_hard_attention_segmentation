@@ -47,6 +47,7 @@ def test_full_prototype(cfg):
     epoch_steps = len(train_dataloader)
     global_step = 0
     best_test_loss = np.inf
+    best_recon_loss = np.inf
     for epoch in tqdm(range(cfg['epochs']), desc='Epoch', total=cfg['epochs'], position=0):
         temp = temp_scheduler.get_value(global_step)
         model.set_temperature(temp)
@@ -61,11 +62,12 @@ def test_full_prototype(cfg):
             frames = frames.to(device=cfg['device'], dtype=torch.float32)
             global_step = i + epoch * epoch_steps
 
-            time_loss_weight = time_loss_weight_scheduler.get_value(global_step)
+            time_loss_weight = 0 if best_recon_loss > cfg.recon_loss_value else time_loss_weight_scheduler.end_value #time_loss_weight_scheduler.get_value(global_step)
             model.set_time_loss_weight(time_loss_weight)
 
             optimizer.zero_grad()
             loss, metrics, info = model.get_loss(context, frames)
+            best_recon_loss = min(best_recon_loss, metrics['reconstruction_loss'])
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['optimizer']['grad_clip'] if 'grad_clip' in cfg['optimizer'] else np.inf)
             if info["segmentation_samples"].grad is not None:
@@ -87,37 +89,42 @@ def test_full_prototype(cfg):
                 visualize(info, frame_coords, logger, global_step, prefix='train')
                 visualize_generations(model, context, logger, global_step, prefix='train')
 
-        with torch.no_grad():
-            model.eval()
-            metric_list = []
-            for i, (frames, context, frame_coords, context_coords) in tqdm(enumerate(test_dataloader), desc='Test Batch', position=1, total=len(test_dataloader), leave=False):
-                test_start_time = time()
-                frames = frames.to(device=cfg['device'], dtype=torch.float32)
-                context = context.to(device=cfg['device'], dtype=torch.float32)
-                loss, metrics, info = model.get_loss(context, frames)
-                metrics['step_time'] = time() - test_start_time
+        if epoch % cfg['test_every'] == 0:
+            with torch.no_grad():
+                model.eval()
+                metric_list = []
+                for i, (frames, context, frame_coords, context_coords) in tqdm(enumerate(test_dataloader), desc='Test Batch', position=1, total=len(test_dataloader), leave=False):
+                    test_start_time = time()
+                    frames = frames.to(device=cfg['device'], dtype=torch.float32)
+                    context = context.to(device=cfg['device'], dtype=torch.float32)
+                    loss, metrics, info = model.get_loss(context, frames)
+                    metrics['step_time'] = time() - test_start_time
 
-            metric_list.append(metrics)
-            metrics = {k : np.mean([m[k] for m in metric_list]) for k in metric_list[0].keys()}
-            metrics = {f'test/{k}' : v for k, v in metrics.items()}
-            for k, v in metrics.items():
-                logger.add_scalar(k, v, global_step)
+                metric_list.append(metrics)
+                metrics = {k : np.mean([m[k] for m in metric_list]) for k in metric_list[0].keys()}
+                metrics = {f'test/{k}' : v for k, v in metrics.items()}
+                for k, v in metrics.items():
+                    logger.add_scalar(k, v, global_step)
 
-            if metrics['test/loss'] < best_test_loss:
-                best_test_loss = metrics['test/loss']
-                torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_model.pt'))
-                torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_full_model.pt'))
+                if metrics['test/loss'] < best_test_loss:
+                    best_test_loss = metrics['test/loss']
+                    torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_model.pt'))
+                    torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_full_model.pt'))
 
-            visualize(info, frame_coords, logger, global_step, prefix='test')
-            visualize_generations(model, context, logger, global_step, prefix='test')
+                visualize(info, frame_coords, logger, global_step, prefix='test')
+                visualize_generations(model, context, logger, global_step, prefix='test')
 
 
-            torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_model.pt'))
-            torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_full_model.pt'))
+                torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_model.pt'))
+                torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_full_model.pt'))
 
 def get_optimizer(cfg, model):
     if cfg['type'] == 'adam':
         return torch.optim.Adam(model.parameters(), **cfg['params'])
+    elif cfg['type'] == 'sgd':
+        return torch.optim.SGD(model.parameters(), **cfg['params'])
+    elif cfg['type'] == 'rmsprop':
+        return torch.optim.RMSprop(model.parameters(), **cfg['params'])
     else:
         raise NotImplementedError(f"Optimizer type {cfg['type']} not implemented")
 

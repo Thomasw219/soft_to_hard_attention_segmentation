@@ -3,22 +3,24 @@ log_dir: 'logs/reconfigure_model'
 # model_load_path: 'logs/frozen_seg_post/frozen_seg_post_04-22-2023_17-56-56/best_model.pt'
 # model_load_path: 'logs/frozen_seg_post/frozen_seg_post_04-22-2023_21-34-30/best_model.pt'
 model_load_path: null
-name: 'test'
-device: 'cuda:1'
+name: 'transformer_preprocess_two_digits'
+device: 'cuda:0'
 log_every: 100
 viz_every: 500
+test_every: 2
 np_seed: 0
 
 epochs: 1600
 
-train_dataset: {train : True, deterministic : False, num_digits : 1}
-test_dataset: {train : False, deterministic : False, num_digits : 1}
+train_dataset: {train : True, deterministic : False, num_digits : 2}
+test_dataset: {train : False, deterministic : False, num_digits : 2}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
-temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.66, min_temp: 0.66}
+temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.9, min_temp: 0.9}
 # temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 400}
-time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.05, start_step: 1500, end_step: 1500}
+recon_loss_value: 0.028
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.0675, start_step: 500, end_step: 500}
 # time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.0, start_step: 0, end_step: 0}
 # state_kl_weight_scheduler: {type: 'linear', start_value: 0.05, end_value: 0.05, start_step: 0, end_step: 100}
 
