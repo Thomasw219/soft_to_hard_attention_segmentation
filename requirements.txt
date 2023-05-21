@@ -33,6 +33,7 @@ pyglet
 
 # For tracking with comet
 comet_ml
+wandb
 
 # For d4rl
 absl-py
