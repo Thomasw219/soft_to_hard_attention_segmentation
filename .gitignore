@@ -3,6 +3,7 @@ data/moving_mnist/*
 outputs/*
 figures/*
 media/*
+wandb/*
 *.pyc
 *.npy
 *.pkl

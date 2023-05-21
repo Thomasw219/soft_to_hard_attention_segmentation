@@ -8,11 +8,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import matplotlib.cm as cm
+import wandb
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from comet_ml import Experiment
 
 from data import StochasticMovingMNIST as Dataset
 from models import VideoSegmentationModel
@@ -20,12 +20,11 @@ from utils import make_scheduler, flatten
 
 @hydra.main(version_base='1.3', config_path='cfgs', config_name='moving_mnist_experiment')
 def test_full_prototype(cfg):
-    experiment = Experiment(
-        api_key = "e1Xmlzbz1cCLgwe0G8m7G58ns",
-        project_name = cfg['comet_project_name'],
-        workspace="thomasw219",
+    wandb.init(
+        sync_tensorboard=True,
+        config=flatten(cfg),
+        project='moving_mnist_segmentation',
     )
-    experiment.log_parameters(flatten(cfg))
 
     np.random.seed(cfg['np_seed'])
     train_dataset = Dataset(**cfg['train_dataset'])
