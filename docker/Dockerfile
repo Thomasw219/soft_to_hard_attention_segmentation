@@ -23,6 +23,7 @@ RUN pip install -r requirements.txt
 COPY docker/render_start.sh ./
 
 ENV D4RL_SUPPRESS_IMPORT_ERROR=1
+ENV WANDB_API_KEY=ab5e2b9b3ac7733d070d3bff581d6a4cd7753d8e
 
 CMD . ./render_start.sh
 
