@@ -74,7 +74,7 @@ def make_video(frames,name):
         writer.append_data(im)
     writer.close()
 
-def flatten(d, parent_key='', sep='_'):
+def flatten(d, parent_key='', sep='/'):
     items = []
     for k, v in d.items():
         new_key = parent_key + sep + k if parent_key else k
