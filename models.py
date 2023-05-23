@@ -164,11 +164,11 @@ class FullPrototypeModel(nn.Module):
         self.segmentation_gru = nn.GRUCell(cfg.segmentation_transformer_dim + 1, cfg.segmentation_transformer_dim)
         self.segmentation_post = StandardMLP(input_dim=cfg.segmentation_transformer_dim, **cfg.segmentation_post_params, output_dim=1)
 
-        # self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.segmentation_transformer_dim, **cfg.compression_mlp_encoder_params, output_dim=cfg.temporal_attention_dim)
-        self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + 1, **cfg.compression_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
-        self.compression_transformer_encoder_layer = rpr.TransformerEncoderLayerRPR(d_model=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params, er_len=max_seq_len)
-        self.compression_transfomer = rpr.TransformerEncoderRPR(self.compression_transformer_encoder_layer, **cfg.compression_transformer_params)
-        self.compression_mlp_decoder = StandardMLP(input_dim=cfg.compression_transformer_dim, **cfg.compression_mlp_decoder_params, output_dim=cfg.temporal_attention_dim)
+        self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + cfg.segmentation_transformer_dim, **cfg.compression_mlp_encoder_params, output_dim=cfg.temporal_attention_dim)
+        # self.compression_mlp_encoder = StandardMLP(input_dim=cfg.encoding_dim + 1, **cfg.compression_mlp_encoder_params, output_dim=cfg.compression_transformer_dim)
+        # self.compression_transformer_encoder_layer = rpr.TransformerEncoderLayerRPR(d_model=cfg.compression_transformer_dim, **cfg.compression_transformer_encoder_layer_params, er_len=max_seq_len)
+        # self.compression_transfomer = rpr.TransformerEncoderRPR(self.compression_transformer_encoder_layer, **cfg.compression_transformer_params)
+        # self.compression_mlp_decoder = StandardMLP(input_dim=cfg.compression_transformer_dim, **cfg.compression_mlp_decoder_params, output_dim=cfg.temporal_attention_dim)
         self.abstract_rep_post = StandardMLP(input_dim=cfg.temporal_attention_dim, **cfg.abstract_rep_post_params, output_dim=cfg.abstract_rep_stoch_dim * 2)
 
         self.abstract_rep_mlp_encoder = StandardMLP(input_dim=cfg.abstract_rep_stoch_dim, **cfg.abstract_rep_mlp_encoder_params, output_dim=cfg.abstract_rep_transformer_dim)
@@ -605,11 +605,11 @@ class VideoSegmentationModel(FullPrototypeModel):
             segmentation_samples.retain_grad()
         segment_weights, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
-        # attention_encodings = self.compression_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
+        attention_encodings = self.compression_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
 
-        pre_attention_encodings = self.compression_mlp_encoder(torch.cat([encodings, segmentation_samples.unsqueeze(-1)], dim=-1))
-        transformed_pre_attention_encodings = self.compression_transfomer(torch.transpose(pre_attention_encodings, 0, 1)).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
-        attention_encodings = self.compression_mlp_decoder(transformed_pre_attention_encodings)
+        # pre_attention_encodings = self.compression_mlp_encoder(torch.cat([encodings, segmentation_samples.unsqueeze(-1)], dim=-1))
+        # transformed_pre_attention_encodings = self.compression_transfomer(torch.transpose(pre_attention_encodings, 0, 1)).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
+        # attention_encodings = self.compression_mlp_decoder(transformed_pre_attention_encodings)
 
         repeated_attention_encodings = torch.cat([attention_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.temporal_attention_dim)
         attended_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_attention_encodings, dim=2)
