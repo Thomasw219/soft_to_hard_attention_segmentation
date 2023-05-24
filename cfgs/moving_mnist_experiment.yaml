@@ -3,12 +3,18 @@ comet_project_name: 'moving_mnist_segmentation'
 # model_load_path: 'logs/moving_mnist/original_params_dont_work_04-21-2023_21-59-11/best_model.pt'
 # model_load_path: 'logs/frozen_seg_post/frozen_seg_post_04-22-2023_17-56-56/best_model.pt'
 # model_load_path: 'logs/frozen_seg_post/frozen_seg_post_04-22-2023_21-34-30/best_model.pt'
+# model_load_path: 'logs/reconfigure_model/transformer_preprocess_two_digits_05-21-2023_22-03-16/best_model.pt'
+# model_load_path: 'logs/imported/transformer_preprocess_two_digits_05-22-2023_10-51-10/best_model.pt'
+# model_load_path: 'logs/reconfigure_model/transformer_preprocess_two_digits_05-23-2023_11-09-37/best_model.pt'
+# model_load_path: 'logs/imported/transformer_preprocess_two_digits_05-23-2023_13-10-41/best_model.pt'
+# model_load_path: 'logs/reconfigure_model/transformer_preprocess_two_digits_05-24-2023_10-15-41/latest_model.pt'
+# model_load_path: 'logs/reconfigure_model/transformer_preprocess_two_digits_05-24-2023_11-56-04/latest_model.pt'
 model_load_path: null
 name: 'two_digits'
 device: 'cuda:0'
 log_every: 100
 viz_every: 500
-test_every: 2
+test_every: 4
 np_seed: 0
 
 epochs: 1600
@@ -18,10 +24,10 @@ test_dataset: {train : False, deterministic : False, num_digits : 2}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 8}
 
-temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.8, min_temp: 0.8}
+temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.8, min_temp: 0.33}
 # temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 400}
 recon_loss_value: 1.0
-time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.0475, start_step: 500, end_step: 500}
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.01, start_step: 500, end_step: 500}
 # time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.0, start_step: 0, end_step: 0}
 # state_kl_weight_scheduler: {type: 'linear', start_value: 0.05, end_value: 0.05, start_step: 0, end_step: 100}
 

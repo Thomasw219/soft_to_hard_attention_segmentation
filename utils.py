@@ -91,9 +91,9 @@ if __name__ == "__main__":
         'type': 'gumbel_softmax',
         'start_step': 0,
         'N': 1000,
-        'r': 5.0e-5,
-        'max_temp': 2.0,
-        'min_temp': 0.1,
+        'r': 1.0e-5,
+        'max_temp': 0.8,
+        'min_temp': 0.33,
     })
 
     x = np.arange(600000)

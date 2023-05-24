@@ -63,7 +63,8 @@ def test_full_prototype(cfg):
         # model.set_state_kl_weight(state_kl_weight)
         # logger.add_scalar('train/state_kl_weight', state_kl_weight, global_step)
         model.train()
-        for i, (frames, context, frame_coords, context_coords) in tqdm(enumerate(train_dataloader), desc='Train Batch', position=1, total=len(train_dataloader), leave=False):
+        tqdm_bar = tqdm(enumerate(train_dataloader), desc='Train Batch', position=1, total=len(train_dataloader), leave=False)
+        for i, (frames, context, frame_coords, context_coords) in tqdm_bar:
             train_start_time = time()
             context = context.to(device=cfg['device'], dtype=torch.float32)
             frames = frames.to(device=cfg['device'], dtype=torch.float32)
@@ -74,6 +75,7 @@ def test_full_prototype(cfg):
 
             optimizer.zero_grad()
             loss, metrics, info = model.get_loss(context, frames)
+            tqdm_bar.set_description(f'Train Batch (average_compression: {metrics['average_compression']})')
             best_recon_loss = min(best_recon_loss, metrics['reconstruction_loss'])
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['optimizer']['grad_clip'] if 'grad_clip' in cfg['optimizer'] else np.inf)
