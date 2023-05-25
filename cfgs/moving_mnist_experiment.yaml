@@ -10,8 +10,8 @@ comet_project_name: 'moving_mnist_segmentation'
 # model_load_path: 'logs/reconfigure_model/transformer_preprocess_two_digits_05-24-2023_10-15-41/latest_model.pt'
 # model_load_path: 'logs/reconfigure_model/transformer_preprocess_two_digits_05-24-2023_11-56-04/latest_model.pt'
 # model_load_path: 'logs/reconfigure_model/two_digits_05-24-2023_15-47-07/best_model.pt'
-model_load_path: 'logs/reconfigure_model/two_digits_05-24-2023_20-50-38/latest_model.pt'
-# model_load_path: null
+# model_load_path: 'logs/reconfigure_model/two_digits_05-24-2023_20-50-38/latest_model.pt'
+model_load_path: null
 name: 'two_digits'
 device: 'cuda:0'
 log_every: 100
