@@ -143,9 +143,18 @@ def plt_prep(tensor):
 
 COLORS = ['r', 'y', 'b', 'c']
 
+def add_border(video, border_values, border_size=2):
+    batch_size, length, channels, height, width = video.shape
+    assert batch_size == 1
+    broadcastable = border_values.unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+    side = broadcastable.expand(1, -1, channels, height, border_size)
+    long_side = broadcastable.expand(1, -1, channels, border_size, width + 2 * border_size)
+    border_video = torch.cat([long_side, torch.cat([side, video, side], dim=4), long_side], dim=3)
+    return border_video
+
 def visualize(info, frame_coords, logger, global_step, n_samples=3, prefix='train'):
     plot_fig = plt.figure(0)
-    delta_t_fig = plt.figure(1)
+    # delta_t_fig = plt.figure(1)
     delta_t_logit_fig = plt.figure(2)
     for i in range(n_samples):
         segmentations = plt_prep(torch.sigmoid(info['segmentation_post_logits'][i]))
@@ -161,28 +170,33 @@ def visualize(info, frame_coords, logger, global_step, n_samples=3, prefix='trai
         plot_ax.vlines(indices[segmentations > 0.5], min_y, max_y, color='k', label='segmentation', zorder=0)
 
         # Plot delta_t for sequence
-        delta_t_ax = delta_t_fig.add_subplot(n_samples, 1, i+1)
-        delta_t_ax.plot(plt_prep(info['segmentation_samples'][i]), label='delta_t', c='r')
+        # delta_t_ax = delta_t_fig.add_subplot(n_samples, 1, i+1)
+        # delta_t_ax.plot(plt_prep(info['segmentation_samples'][i]), label='delta_t', c='r')
 
         # Plot delta_t logit for sequence
         delta_t_logit_ax = delta_t_logit_fig.add_subplot(n_samples, 1, i+1)
-        delta_t_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_post_logits'][i, :, 0])), label='post_prob', c='b')
-        delta_t_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0])), label='prior prob', c='r')
+        delta_t_logit_ax.plot(np.insert(plt_prep(torch.sigmoid(info['segmentation_post_logits'][i, :, 0])), 0, 0), label='post_prob', c='b')
+        delta_t_logit_ax.plot(np.insert(plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0])), 0, 0), label='prior prob', c='r')
+        delta_t_logit_ax.plot(plt_prep(info['segmentation_samples'][i]) * np.max(np.concatenate([plt_prep(torch.sigmoid(info['segmentation_post_logits'][i, :, 0])), plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0]))])), label='delta_t', c='g')
+        kl_div_ax = delta_t_logit_ax.twinx()
+        kl_div_ax.plot(plt_prep(info['abs_kl'][i]), label='abs_kl', c='y')
+        kl_div_ax.plot(plt_prep(info['state_kl'][i]), label='state_kl', c='c')
 
         if i == 0:
-            delta_t_ax.legend()
+            # delta_t_ax.legend()
             delta_t_logit_ax.legend()
+            kl_div_ax.legend()
             plot_ax.legend()
 
     logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
-    logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
+    # logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
     logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
 
     logger.add_video(prefix + '/ground_truth', info['ground_truth_frames'][0:1].detach().cpu(), global_step)
-    logger.add_video(prefix + '/reconstructed', torch.clamp(info['reconstructed_frames'][0:1], 0, 1).detach().cpu(), global_step)
+    logger.add_video(prefix + '/reconstructed', add_border(torch.clamp(info['reconstructed_frames'][0:1], 0, 1), info['segmentation_samples'][0]).detach().cpu(), global_step)
 
     plot_fig.clf()
-    delta_t_fig.clf()
+    # delta_t_fig.clf()
     delta_t_logit_fig.clf()
 
 def visualize_generations(model, context, logger, global_step, n_samples=3, prefix='test'):
@@ -194,12 +208,13 @@ def visualize_generations(model, context, logger, global_step, n_samples=3, pref
     for i in range(n_samples):
         segmentation_prob_ax = segmentation_prob_fig.add_subplot(n_samples, 1, i+1)
         segmentation_prob_ax.plot(plt_prep(info['segmentation_probs'][i, :]), label='segmentation probability', c='b')
+        segmentation_prob_ax.plot(plt_prep(info['segmentation_samples'][i, :]) * np.max(plt_prep(info['segmentation_probs'][i, :])), label='delta_t', c='g')
 
         if i == 0:
             segmentation_prob_ax.legend()
 
     logger.add_figure(prefix + '/generation_segmentation_prob', segmentation_prob_fig, global_step)
-    logger.add_video(prefix + '/generated', torch.clamp(generated_trajs[0:1], 0, 1), global_step)
+    logger.add_video(prefix + '/generated', add_border(torch.clamp(generated_trajs[0:1], 0, 1), info['segmentation_samples'][0].detach().cpu()), global_step)
     logger.add_video(prefix + '/generated_context', torch.clamp(context[0:1], 0, 1), global_step)
 
     segmentation_prob_fig.clf()

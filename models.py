@@ -782,7 +782,8 @@ class VideoSegmentationModel(FullPrototypeModel):
         # abstract_rep_prior_means, abstract_rep_prior_stds = torch.zeros_like(abstract_rep_post_means), torch.ones_like(abstract_rep_post_stds)
 
         # TODO: Don't include time loss factor into KL loss, keep them factorized
-        abstract_rep_kl_loss = torch.mean((self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples)
+        abs_kl = (self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)) * segmentation_samples
+        abstract_rep_kl_loss = torch.mean(abs_kl)
         # abs_kl = self.kl_balance_gaussian(abstract_rep_prior_means, abstract_rep_prior_stds, abstract_rep_post_means, abstract_rep_post_stds, self.cfg.abstract_kl_balance)
         # abstract_rep_kl_loss = torch.mean(torch.sum(abs_kl * segmentation_samples.detach(), dim=1) / torch.sum(segmentation_samples, dim=1))
 
@@ -814,6 +815,8 @@ class VideoSegmentationModel(FullPrototypeModel):
             state_transition_kl_loss=state_rep_kl_loss.item(),
             segmentation_kl_loss=segmentation_kl_loss.item(),
         )
+        info['abs_kl'] = abs_kl
+        info['state_kl'] = state_kl
 
         return model_loss, metrics, info
 
