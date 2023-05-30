@@ -14,7 +14,7 @@ ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$WS_PATH/.mujoco/mujoco210/bin
 ENV DISPLAY=:1
 
 RUN apt-get update && apt-get install -y libosmesa6-dev build-essential patchelf \
-ffmpeg libgl1-mesa-dev python-opengl apt-utils curl xvfb xorg-dev libsdl2-dev swig cmake
+ffmpeg libgl1-mesa-dev python-opengl apt-utils curl xvfb xorg-dev libsdl2-dev swig cmake libglfw3 libglew2.1
 
 RUN pip install -r requirements.txt
 # TODO: get rid of this hack
