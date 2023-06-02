@@ -11,7 +11,9 @@ comet_project_name: 'moving_mnist_segmentation'
 # model_load_path: 'logs/reconfigure_model/transformer_preprocess_two_digits_05-24-2023_11-56-04/latest_model.pt'
 # model_load_path: 'logs/reconfigure_model/two_digits_05-24-2023_15-47-07/best_model.pt'
 # model_load_path: 'logs/reconfigure_model/two_digits_05-24-2023_20-50-38/latest_model.pt'
-model_load_path: null
+# model_load_path: 'logs/reconfigure_model/two_digits_05-27-2023_22-30-56/latest_model.pt'
+model_load_path: 'logs/reconfigure_model/two_digits_05-29-2023_00-58-07/latest_model.pt'
+# model_load_path: null
 name: 'two_digits'
 device: 'cuda:0'
 log_every: 100
@@ -29,7 +31,7 @@ dataloader: {batch_size: 64, shuffle: False, num_workers: 8}
 temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.8, min_temp: 0.8}
 # temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 400}
 recon_loss_value: 1.0
-time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.0, start_step: 500, end_step: 500}
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.025, start_step: 500, end_step: 500}
 # time_loss_weight_scheduler: {type: 'linear', start_value: 0.0, end_value: 0.0, start_step: 0, end_step: 0}
 # state_kl_weight_scheduler: {type: 'linear', start_value: 0.05, end_value: 0.05, start_step: 0, end_step: 100}
 
