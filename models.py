@@ -805,8 +805,8 @@ class RLSegmentationModel(FullPrototypeModel):
         self.action_dim = action_dim
 
         self.state_rep_mlp_encoder = StandardMLP(input_dim=cfg.state_rep_stoch_dim + self.abstract_rep_dim + obs_dim, **cfg.state_rep_mlp_encoder_params, output_dim=cfg.state_rep_transformer_dim)
-        self.decoder = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + obs_dim, **cfg.decoder_params, output_dim=action_dim)
-        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim + self.abstract_rep_dim + obs_dim, **cfg.segmentation_prior_params, output_dim=1)
+        self.decoder = StandardMLP(input_dim=self.state_rep_dim, **cfg.decoder_params, output_dim=action_dim)
+        self.segmentation_prior = StandardMLP(input_dim=self.state_rep_dim, **cfg.segmentation_prior_params, output_dim=1)
 
         self.gru_init = StandardMLP(input_dim=self.cfg.segmentation_transformer_dim, layer_sizes=[256, 256], output_dim=self.cfg.segmentation_transformer_dim)
         self.abstract_init = StandardMLP(input_dim=obs_dim, layer_sizes=[256, 256], output_dim=self.cfg.abstract_rep_stoch_dim)
@@ -819,7 +819,6 @@ class RLSegmentationModel(FullPrototypeModel):
         device = traj.device
         assert seq_len <= self.max_seq_len, "Trajectories must be less than length {}".format(self.seq_len)
         encodings = self.encoder(traj)
-        broadcast_positional_encoding = self.positional_encoding_dropout(self.positional_encoding[:, :traj.shape[1]].expand(batch_size, -1, -1))
 
         segmentation_encodings = self.segmentation_mlp_encoder(encodings)
         transformed_segmentation_encodings = self.segmentation_transformer_encoder(torch.transpose(segmentation_encodings, 0, 1)).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
@@ -858,20 +857,27 @@ class RLSegmentationModel(FullPrototypeModel):
             segmentation_samples.register_hook(lambda grad: self.cfg.time_grad_scalar * grad)
         if segmentation_samples.requires_grad:
             segmentation_samples.retain_grad()
-        segment_weights, _, causal_segmentation_attention_mask, _ = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
+        segment_weights, _, causal_segmentation_attention_mask, abstract_causal_segmentation_attention_mask = self.get_segmentation_attention_masks_probabilistic(segmentation_samples)
 
-        # query_encodings = self.query_mlp_encoder(torch.cat([encodings, broadcast_positional_encoding], dim=-1))
-        query_encodings = self.query_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
-        repeated_query_encodings = torch.cat([query_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.query_attention_dim)
-        attended_query_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_query_encodings, dim=2)
-        abstract_rep_post_params = self.abstract_rep_post(attended_query_encodings)
+        attention_encodings = self.compression_mlp_encoder(torch.cat([encodings, transformed_segmentation_encodings], dim=-1))
+
+        # pre_attention_encodings = self.compression_mlp_encoder(torch.cat([encodings, segmentation_samples.unsqueeze(-1)], dim=-1))
+        # transformed_pre_attention_encodings = self.compression_transfomer(torch.transpose(pre_attention_encodings, 0, 1)).transpose(0, 1) # TRANSPOSE FOR RPR TRANSFORMER
+        # attention_encodings = self.compression_mlp_decoder(transformed_pre_attention_encodings)
+
+        repeated_attention_encodings = torch.cat([attention_encodings] * seq_len, dim=1).reshape(batch_size, seq_len, seq_len, self.cfg.temporal_attention_dim)
+        attended_encodings = torch.sum(segment_weights.unsqueeze(-1) * repeated_attention_encodings, dim=2)
+        abstract_rep_post_params = self.abstract_rep_post(attended_encodings)
         abstract_rep_post_means, abstract_rep_post_stds = abstract_rep_post_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_post_params[..., self.cfg.abstract_rep_stoch_dim:])
         abstract_rep_stoch_samples = self.reparameterize_segments(abstract_rep_post_means, abstract_rep_post_stds, segmentation_samples, std_scalar=abstract_sample_std_scalar)
 
         abstract_init = self.abstract_init(obs[:, 0:1, :])
-        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_stoch_samples, 1, fill=abstract_init))
+        abstract_rep_encodings = self.abstract_rep_mlp_encoder(abstract_rep_stoch_samples)
+        transformed_abstract_rep_encodings = self.abstract_rep_transformer_encoder(abstract_rep_encodings, mask=abstract_causal_segmentation_attention_mask)
+        abstract_rep_deter = self.abstract_rep_mlp_decoder(transformed_abstract_rep_encodings)
+        abstract_rep_prior_params = self.abstract_rep_prior(shift_forward(abstract_rep_deter, 1, fill=abstract_init))
         abstract_rep_prior_means, abstract_rep_prior_stds = abstract_rep_prior_params[..., :self.cfg.abstract_rep_stoch_dim], nn.functional.softplus(abstract_rep_prior_params[..., self.cfg.abstract_rep_stoch_dim:])
-        abstract_rep = abstract_rep_stoch_samples
+        abstract_rep = torch.cat([abstract_rep_stoch_samples, abstract_rep_deter], dim=-1)
 
         state_rep_post_params = self.state_rep_post(torch.cat([encodings, abstract_rep], dim=-1))
         state_rep_post_means, state_rep_post_stds = state_rep_post_params[..., :self.cfg.state_rep_stoch_dim], nn.functional.softplus(state_rep_post_params[..., self.cfg.state_rep_stoch_dim:])
@@ -885,7 +891,7 @@ class RLSegmentationModel(FullPrototypeModel):
         state_rep = torch.cat([state_rep_stoch_samples, state_rep_deter], dim=-1)
 
         # state_rep = torch.zeros_like(state_rep)
-        decoder_input = torch.cat([state_rep, abstract_rep, obs], dim=-1)
+        decoder_input = torch.cat([state_rep], dim=-1)
         segmentation_prior_logits = self.segmentation_prior(decoder_input)[:, :-1]
         reconstructed_traj = self.decoder(decoder_input)
 

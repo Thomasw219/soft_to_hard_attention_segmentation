@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 
 import imageio
 import numpy as np
+import torch
 
 class SchedulerBase(ABC):
     @abstractmethod
@@ -66,6 +67,16 @@ def make_scheduler(cfg):
         return GumbelSoftmaxScheduler(**cfg)
     else:
         raise ValueError(f'Unknown scheduler type: {cfg["type"]}')
+
+def get_optimizer(cfg, model):
+    if cfg['type'] == 'adam':
+        return torch.optim.Adam(model.parameters(), **cfg['params'])
+    elif cfg['type'] == 'sgd':
+        return torch.optim.SGD(model.parameters(), **cfg['params'])
+    elif cfg['type'] == 'rmsprop':
+        return torch.optim.RMSprop(model.parameters(), **cfg['params'])
+    else:
+        raise NotImplementedError(f"Optimizer type {cfg['type']} not implemented")
 
 def make_video(frames,name):
     writer = imageio.get_writer(name+'.mp4', fps=20)

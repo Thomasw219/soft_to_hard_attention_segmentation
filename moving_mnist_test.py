@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from data import StochasticMovingMNIST as Dataset
 from models import VideoSegmentationModel
-from utils import make_scheduler, flatten
+from utils import make_scheduler, flatten, get_optimizer
 
 @hydra.main(version_base='1.3', config_path='cfgs', config_name='moving_mnist_experiment')
 def test_full_prototype(cfg):
@@ -128,15 +128,7 @@ def test_full_prototype(cfg):
                 torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_model.pt'))
                 torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'latest_full_model.pt'))
 
-def get_optimizer(cfg, model):
-    if cfg['type'] == 'adam':
-        return torch.optim.Adam(model.parameters(), **cfg['params'])
-    elif cfg['type'] == 'sgd':
-        return torch.optim.SGD(model.parameters(), **cfg['params'])
-    elif cfg['type'] == 'rmsprop':
-        return torch.optim.RMSprop(model.parameters(), **cfg['params'])
-    else:
-        raise NotImplementedError(f"Optimizer type {cfg['type']} not implemented")
+
 
 def plt_prep(tensor):
     return tensor.detach().cpu().numpy().squeeze()

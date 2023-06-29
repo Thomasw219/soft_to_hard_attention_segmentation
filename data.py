@@ -216,7 +216,6 @@ class D4RLDataset:
         if dataset_name == 'antmaze-large-diverse-v0':
             episode_points = [0]
             episode_points.extend([1001 + i for i in range(0, 1000000 - 1000, 1001)])
-            self.episodes = [{k : v[episode_start:episode_end] for k, v in dataset.items()} for episode_start, episode_end in zip(episode_points[:-1], episode_points[1:])]
         elif dataset_name == 'kitchen-mixed-v0' or dataset_name == 'kitchen-partial-v0':
             episode_points = [0]
             episode_points.extend((np.arange(136950)[dataset['terminals']] + 1).tolist())

@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from data import D4RLDataset as Dataset
 from models import RLSegmentationModel
-from utils import make_scheduler
+from utils import make_scheduler, get_optimizer
 
 COLORS = ["#e74c3c", "#8e44ad", "#3498db", "#1abc9c", "#2ecc71", "#f1c40f", "#e67e22", "#2e4053"]
 
@@ -108,14 +108,9 @@ def test_full_prototype(cfg):
                     best_test_loss = metrics['test/loss']
                     torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'best_model.pt'))
                     torch.save(model, os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'full_model.pt'))
+                torch.save(model.state_dict(), os.path.join(cfg['log_dir'], cfg['name'] + timestring, 'last_model.pt'))
 
                 visualize(info, logger, global_step, prefix='test')
-
-def get_optimizer(cfg, model):
-    if cfg['type'] == 'adam':
-        return torch.optim.Adam(model.parameters(), **cfg['params'])
-    else:
-        raise NotImplementedError(f"Optimizer type {cfg['type']} not implemented")
 
 def plt_prep(tensor):
     return tensor.detach().cpu().numpy().squeeze()

@@ -1,4 +1,4 @@
-reconstruction_loss_weight: 10.0
+reconstruction_loss_weight: 1.0
 abstract_transition_kl_weight: 0.001 #0.0036 # 0.03
 abstract_kl_balance: 0.8
 state_transition_kl_weight: 0.01
