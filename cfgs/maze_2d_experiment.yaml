@@ -1,21 +1,22 @@
-log_dir: 'logs/maze'
-model_load_path: 'logs/maze/maze_policy_segmentation_04-03-2023_16-53-45/best_model.pt'
+log_dir: 'logs/maze_large'
+# model_load_path: 'logs/maze/maze_policy_segmentation_04-03-2023_16-53-45/best_model.pt'
+model_load_path: null
 name: 'maze_policy_segmentation'
 device: 'cuda:0'
 log_every: 100
 viz_every: 500
 np_seed: 0
 
-epochs: 4000
+epochs: 8000
 
 train_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}
 test_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
-temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.50, min_temp: 0.50}
+temp_scheduler: {type: 'gumbel_softmax', start_step: 0, N: 1000, r: 1.0e-5, max_temp: 0.66, min_temp: 0.66}
 # temp_scheduler: {type: 'logarithmic', start_value: 2.0, end_value: 0.1, start_step: 200, end_step: 400}
-time_loss_weight_scheduler: {type: 'linear', start_value: 0.25, end_value: 0.25, start_step: 10, end_step: 10}
+time_loss_weight_scheduler: {type: 'linear', start_value: 0.20, end_value: 0.20, start_step: 0, end_step: 0}
 # state_kl_weight_scheduler: {type: 'linear', start_value: 0.05, end_value: 0.05, start_step: 0, end_step: 100}
 
 defaults:

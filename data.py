@@ -204,6 +204,10 @@ class GeneratedD4RLDataset:
     def __len__(self):
         return self.n_episodes
 
+    def get_episode(self, index):
+        ep = self.episodes[index]
+        return ep
+
 class D4RLDataset:
     def __init__(
             self,
@@ -212,6 +216,7 @@ class D4RLDataset:
     ):
         self.signal_length = signal_length
         env = gym.make(dataset_name)
+        self.dataset_name = dataset_name
         dataset = env.get_dataset()
         if dataset_name == 'antmaze-large-diverse-v0':
             episode_points = [0]
@@ -219,6 +224,9 @@ class D4RLDataset:
         elif dataset_name == 'kitchen-mixed-v0' or dataset_name == 'kitchen-partial-v0':
             episode_points = [0]
             episode_points.extend((np.arange(136950)[dataset['terminals']] + 1).tolist())
+        elif dataset_name == 'kitchen-complete-v0':
+            episode_points = [0]
+            episode_points.extend((np.arange(3680)[dataset['terminals']] + 1).tolist())
         else:
             raise NotImplementedError()
         self.episodes = [{k : v[episode_start:episode_end] for k, v in dataset.items()} for episode_start, episode_end in zip(episode_points[:-1], episode_points[1:])]
@@ -230,6 +238,7 @@ class D4RLDataset:
             min_len = np.minimum(min_len, length)
             assert length > self.signal_length
         print("Min length: ", min_len)
+        print("Num episodes: ", len(self.episodes))
 
         self.obs_dim = self.episodes[0]['observations'].shape[-1]
         self.action_dim = self.episodes[0]['actions'].shape[-1]
@@ -238,11 +247,15 @@ class D4RLDataset:
         return self.episodes[index]
 
     def __getitem__(self, index):
+        if self.dataset_name == 'kitchen-complete-v0':
+            index = np.random.randint(0, len(self.episodes))
         ep = self.episodes[index]
         start_index = np.random.randint(0, ep['observations'].shape[0] - self.signal_length)
         return ep['observations'][start_index:start_index+self.signal_length], ep['actions'][start_index:start_index+self.signal_length]
 
     def __len__(self):
+        if self.dataset_name == 'kitchen-complete-v0':
+            return 640
         return len(self.episodes)
 
 class StochasticMovingMNIST(object):

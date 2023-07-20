@@ -88,7 +88,7 @@ def test_full_prototype(cfg):
             if global_step % cfg['viz_every'] == 0:
                 visualize(info, logger, global_step, prefix='train')
 
-        if epoch % 10 == 0:
+        if epoch % 50 == 0:
             with torch.no_grad():
                 model.eval()
                 metric_list = []
@@ -172,10 +172,8 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
             delta_t_logit_ax.legend()
             actions_ax.legend()
 
-    plot_fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.autumn), label="Time step (gt)")
-
     logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
-    logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
+    # logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
     logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
     # logger.add_figure(prefix + '/latent_features', latent_features_fig, global_step)
     logger.add_figure(prefix + '/actions', actions_fig, global_step)
