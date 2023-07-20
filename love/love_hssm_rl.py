@@ -875,3 +875,95 @@ class EnvModel(nn.Module):
     def get_loss(self, obs_data_list, action_list):
         seq_size = action_list.size(1)
         init_size = 0
+
+        [
+            obs_rec_list,
+            prior_boundary_log_density_list,
+            post_boundary_log_density_list,
+            prior_obs_state_list,
+            post_obs_state_list,
+            boundary_data_list,
+            prior_boundary_list,
+            post_boundary_list,
+            abs_state_list,
+            selected_option,
+            onehot_z_list,
+            vq_loss_list,
+        ] = self.state_model(obs_data_list, action_list, seq_size, init_size)
+
+        ########################################################
+        # (2) compute obs_cost (sum over spatial and channels) #
+        ########################################################
+        # obs_rec_list: (batch_size, seq_len, action_dim)
+        # action_list: (batch_size, seq_len)
+        obs_cost = F.cross_entropy(
+            obs_rec_list.reshape(-1, obs_rec_list.shape[-1]),
+            action_list[:, init_size:-init_size].reshape(-1),
+        )
+
+        #######################
+        # (3) compute kl_cost #
+        #######################
+        # compute kl related to states, since we are not using KL for RL
+        # setting we avoid the computation
+        if self._output_normal:
+          kl_obs_state_list = []
+          for t in range(seq_size):
+             kl_obs_state = kl_divergence(post_obs_state_list[t], prior_obs_state_list[t])
+             kl_obs_state_list.append(kl_obs_state.sum(-1))
+          kl_obs_state_list = torch.stack(kl_obs_state_list, dim=1)
+
+          # compute kl related to boundary
+          kl_mask_list = post_boundary_log_density_list - prior_boundary_log_density_list
+        else:
+          kl_obs_state_list = torch.zeros(
+              post_obs_state_list[0].shape[0], seq_size)
+
+        ###############################
+        # (4) compute encoding length #
+        ###############################
+        marginal, all_codes, all_boundaries = self.state_model.abs_marginal(
+            obs_data_list, action_list, seq_size, init_size
+        )
+        encoding_length = self.state_model.encoding_cost(
+            marginal, onehot_z_list, boundary_data_list.squeeze(-1)
+        )
+
+        if self.ddo:
+            train_loss = self.rec_coeff * obs_cost.mean() + \
+                    self.kl_coeff * kl_mask_list.mean() + \
+                    self.coding_len_coeff * encoding_length + \
+                    torch.mean(vq_loss_list)
+        else:
+            train_loss = (
+                self.rec_coeff * obs_cost.mean()
+                + self.kl_coeff * (kl_obs_state_list.mean() + kl_mask_list.mean())
+                + self.coding_len_coeff * encoding_length
+                + torch.mean(vq_loss_list)
+            )
+
+        pos_obs_state = [x for x in post_obs_state_list]
+        if self._output_normal:
+            pos_obs_state = [x.mean for x in post_obs_state_list]
+
+        return {
+            "rec_data": obs_rec_list,
+            "mask_data": boundary_data_list,
+            "obs_cost": obs_cost,
+            "kl_abs_state": torch.zeros_like(kl_obs_state_list),
+            "kl_obs_state": kl_obs_state_list,
+            "kl_mask": kl_mask_list,
+            "p_mask": prior_boundary_list.mean,
+            "q_mask": post_boundary_list.mean,
+            "p_ent": prior_boundary_list.entropy(),
+            "q_ent": post_boundary_list.entropy(),
+            "beta": self.state_model.mask_beta,
+            "encoding_length": encoding_length,
+            "marginal": marginal.detach().cpu().numpy(),
+            "train_loss": train_loss,
+            "option_list": selected_option,
+            "pos_obs_state": torch.stack(pos_obs_state, axis=1),
+            "abs_state": torch.stack(abs_state_list, axis=1),
+            "all_boundaries": all_boundaries,
+            "vq_loss_list": torch.mean(vq_loss_list).detach(),
+        }
