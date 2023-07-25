@@ -1,0 +1,25 @@
+log_dir: 'logs/love_maze'
+# model_load_path: 'logs/maze/maze_policy_segmentation_04-03-2023_16-53-45/best_model.pt'
+model_load_path: null
+name: 'vta'
+device: 'cuda:0'
+log_every: 10
+viz_every: 20
+np_seed: 0
+
+epochs: 8000
+
+train_dataset: {signal_length: 130, data_path: 'data/raw/maze2d-medium-v1.npy'}
+test_dataset: {signal_length: 130, data_path: 'data/raw/maze2d-medium-v1.npy'}
+
+dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
+
+action_encoder: {layer_sizes: [400, 400, 400, 400], activate_last: False, activation: 'elu'}
+obs_encoder: {layer_sizes: [400, 400, 400, 400], activate_last: False, activation: 'elu'}
+decoder: {layer_sizes: [400, 400, 400, 400], activate_last: False, activation: 'elu'}
+embedding_size: 128
+
+defaults:
+  - model: vta
+  - optimizer: vta_optimizer
+

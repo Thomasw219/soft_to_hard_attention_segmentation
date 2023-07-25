@@ -1,0 +1,10 @@
+belief_size: 64
+state_size: 64
+num_layers: 1
+max_seg_len: 50
+max_seg_num: 5
+
+rec_coeff: 100.0
+abs_state_coeff: 0.01
+obs_state_coeff: 0.0001
+mask_coeff: 0.0001
