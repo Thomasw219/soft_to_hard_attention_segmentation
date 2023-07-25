@@ -18,7 +18,7 @@ from love.love_hssm_rl import EnvModel
 from models import StandardMLP
 from utils import make_scheduler
 
-@hydra.main(version_base='1.3', config_path='cfgs', config_name='maze_2d_experiment')
+@hydra.main(version_base='1.3', config_path='cfgs', config_name='love_maze_2d_experiment')
 def test_full_prototype(cfg):
     np.random.seed(cfg['np_seed'])
     train_dataset = Dataset(**cfg['train_dataset'])
@@ -32,7 +32,7 @@ def test_full_prototype(cfg):
     action_encoder.embedding_size = embedding_size
     obs_encoder = StandardMLP(input_dim=train_dataset.obs_dim, **cfg['obs_encoder'], output_dim=embedding_size)
     obs_encoder.embedding_size = embedding_size
-    decoder = StandardMLP(input_dim=cfg['model']['belief_size'] + cfg['model']['state_size'], **cfg['decoder'], output_dim=train_dataset.action_dim)
+    decoder = StandardMLP(input_dim=cfg['model']['belief_size'], **cfg['decoder'], output_dim=train_dataset.action_dim * 2)
     model = EnvModel(
         action_encoder,
         obs_encoder,
@@ -78,7 +78,7 @@ def test_full_prototype(cfg):
             if global_step % cfg['viz_every'] == 0:
                 visualize(info, logger, global_step, prefix='train')
 
-        if epoch % 10 == 0:
+        if epoch % 50 == 0:
             with torch.no_grad():
                 model.eval()
                 metric_list = []
@@ -90,7 +90,7 @@ def test_full_prototype(cfg):
                     metrics['step_time'] = time() - test_start_time
 
                 metric_list.append(metrics)
-                metrics = {k : np.mean([m[k] for m in metric_list]) for k in metric_list[0].keys()}
+                metrics = {k : np.mean([m[k].numpy(force=True) if isinstance(m[k], torch.Tensor) else m[k] for m in metric_list]) for k in metric_list[0].keys()}
                 metrics = {f'test/{k}' : v for k, v in metrics.items()}
                 for k, v in metrics.items():
                     logger.add_scalar(k, v, global_step)
@@ -119,19 +119,18 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     plot_fig = plt.figure(0)
     delta_t_fig = plt.figure(1)
     delta_t_logit_fig = plt.figure(2)
-    latent_features_fig = plt.figure(3)
     actions_fig = plt.figure(4)
     for i in range(n_samples):
         # Plot ground truth and reconstruction for n_samples
         plot_ax = plot_fig.add_subplot(n_samples, 1, i+1)
         gt_traj_x = plt_prep(info['ground_truth_obs'][i, :, 0])
         gt_traj_y = plt_prep(info['ground_truth_obs'][i, :, 1])
-        segmentations = plt_prep(torch.sigmoid(info['segmentation_post_logits'][i])) > 0.5
+        segmentations = plt_prep(info['segmentation_post_probs'][i]) > 0.5
         for t in range(sequence_length - 1):
             plot_ax.plot(gt_traj_x[t:t + 2], gt_traj_y[t:t + 2], c=colors_gt[t])
             if segmentations[t]:
                 plot_ax.scatter(gt_traj_x[t], gt_traj_y[t], c='k', s=10)
-        segmentations = plt_prep(torch.sigmoid(info['segmentation_post_logits'][i]))
+        segmentations = plt_prep(info['segmentation_post_probs'][i])
         indices = np.arange(segmentations.shape[0])
         # plot_kl = plot_ax.twinx()
         # plot_kl.plot(plt_prep(info['state_kl'][i]), label='kl_divergence', c='r')
@@ -142,13 +141,8 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
 
         # Plot delta_t logit for sequence
         delta_t_logit_ax = delta_t_logit_fig.add_subplot(n_samples, 1, i+1)
-        delta_t_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_post_logits'][i, :, 0])), label='post_prob', c='b')
-        delta_t_logit_ax.plot(plt_prep(torch.sigmoid(info['segmentation_prior_logits'][i, :, 0])), label='prior prob', c='r')
-
-        # Plot latent features for sequence
-        latent_features_ax = latent_features_fig.add_subplot(n_samples, 1, i+1)
-        for j in range(info['abstract_rep'].shape[-1]):
-            latent_features_ax.plot(plt_prep(info['abstract_rep'][i, :, j]))
+        delta_t_logit_ax.plot(plt_prep(info['segmentation_post_probs'][i, :]), label='post_prob', c='b')
+        delta_t_logit_ax.plot(plt_prep(info['segmentation_prior_probs'][i, :]), label='prior prob', c='r')
 
         # Plot actions for sequence
         actions_ax = actions_fig.add_subplot(n_samples, 1, i+1)
@@ -167,23 +161,21 @@ def visualize(info, logger, global_step, n_samples=3, prefix='train'):
     plot_fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.autumn), label="Time step (gt)")
 
     segmentations_fig = plt.figure(5)
-    segmentations = (info['segmentation_post_logits'] > 0.5).squeeze()
-    segmentation_x = plt_prep(info['ground_truth_obs'][:, 1:, 0][segmentations])
-    segmentation_y = plt_prep(info['ground_truth_obs'][:, 1:, 1][segmentations])
+    segmentations = (info['segmentation_post_probs'] > 0.5).squeeze()
+    segmentation_x = plt_prep(info['ground_truth_obs'][:, :, 0][segmentations])
+    segmentation_y = plt_prep(info['ground_truth_obs'][:, :, 1][segmentations])
     plt.scatter(segmentation_x, segmentation_y, c='k')
 
 
     logger.add_figure(prefix + '/reconstruction', plot_fig, global_step)
     logger.add_figure(prefix + '/delta_t', delta_t_fig, global_step)
     logger.add_figure(prefix + '/delta_t_logit', delta_t_logit_fig, global_step)
-    logger.add_figure(prefix + '/latent_features', latent_features_fig, global_step)
     logger.add_figure(prefix + '/actions', actions_fig, global_step)
     logger.add_figure(prefix + '/segmentations', segmentations_fig, global_step)
 
     plot_fig.clf()
     delta_t_fig.clf()
     delta_t_logit_fig.clf()
-    latent_features_fig.clf()
     actions_fig.clf()
     segmentations_fig.clf()
 
