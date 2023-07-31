@@ -1,13 +1,13 @@
-log_dir: 'logs/maze_large'
+log_dir: 'logs/maze_eval'
 # model_load_path: 'logs/maze/maze_policy_segmentation_04-03-2023_16-53-45/best_model.pt'
 model_load_path: null
-name: 'maze_policy_segmentation'
-device: 'cuda:0'
+name: 'higher_lr'
+device: 'cuda:1'
 log_every: 100
 viz_every: 500
 np_seed: 0
 
-epochs: 8000
+epochs: 4000
 
 train_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}
 test_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}

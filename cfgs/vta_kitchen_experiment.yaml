@@ -1,7 +1,7 @@
-log_dir: 'logs/love_maze'
+log_dir: 'logs/vta_kitchen'
 # model_load_path: 'logs/maze/maze_policy_segmentation_04-03-2023_16-53-45/best_model.pt'
 model_load_path: null
-name: 'maze_policy_segmentation'
+name: 'vta'
 device: 'cuda:1'
 log_every: 100
 viz_every: 100
@@ -9,8 +9,8 @@ np_seed: 0
 
 epochs: 8000
 
-train_dataset: {signal_length: 130, data_path: 'data/raw/maze2d-medium-v1.npy'}
-test_dataset: {signal_length: 130, data_path: 'data/raw/maze2d-medium-v1.npy'}
+train_dataset: {signal_length: 130, dataset_name: 'kitchen-partial-v0'}
+test_dataset: {signal_length: 130, dataset_name: 'kitchen-partial-v0'}
 
 dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
 
@@ -20,6 +20,7 @@ decoder: {layer_sizes: [400, 400, 400, 400], activate_last: False, activation: '
 embedding_size: 128
 
 defaults:
-  - model: love
-  - optimizer: love_optimizer
+  - model: vta
+  - optimizer: vta_optimizer
+
 

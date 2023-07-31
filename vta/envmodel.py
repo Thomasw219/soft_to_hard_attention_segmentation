@@ -17,6 +17,7 @@ class EnvModel(nn.Module):
                  abs_state_coeff=1.0,
                  obs_state_coeff=1.0,
                  mask_coeff=1.0,
+                 compression_coeff=1.0,
                  ):
         super(EnvModel, self).__init__()
         ################
@@ -32,6 +33,7 @@ class EnvModel(nn.Module):
         self.abs_state_coeff = abs_state_coeff
         self.obs_state_coeff = obs_state_coeff
         self.mask_coeff = mask_coeff
+        self.compression_coeff = compression_coeff
 
         ###############
         # init models #
@@ -156,11 +158,15 @@ class EnvModel(nn.Module):
         # compute kl related to boundary
         kl_mask_list = (post_boundary_log_density_list - prior_boundary_log_density_list)
 
+        # compression loss
+        compression_loss = torch.mean(post_boundary_list.probs)
+
         loss = (
             self.rec_coeff * action_cost.mean()
             + self.abs_state_coeff * kl_abs_state_list.mean()
             + self.obs_state_coeff * kl_obs_state_list.mean()
             + self.mask_coeff * kl_mask_list.mean()
+            + self.compression_coeff * compression_loss
         )
 
         metrics = {
@@ -170,6 +176,7 @@ class EnvModel(nn.Module):
             'abs_kl_loss': kl_abs_state_list.mean(),
             'mask_kl_loss': kl_mask_list.mean(),
             'compression_rate': 1 / torch.max(torch.mean(boundary_data_list), torch.tensor(1 / seq_size, device=boundary_data_list.device)),
+            'compression_loss': compression_loss,
         }
 
         info = {

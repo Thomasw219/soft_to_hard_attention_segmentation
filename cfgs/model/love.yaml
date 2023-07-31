@@ -1,5 +1,5 @@
-belief_size: 8
-state_size: 128
+belief_size: 64
+state_size: 64
 num_layers: 1
 max_seg_len: 128
 max_seg_num: 128
