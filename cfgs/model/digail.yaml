@@ -1,0 +1,14 @@
+temperature: 5
+reconstruction_loss_coeff: 1.0
+kl_loss_coeff: 0.0001
+cosine_similarity_loss_weight: 0.0
+
+posterior_latent_size: 8
+policy_latent_size: 8
+
+policy_action_size: 0
+posterior_action_size: 0
+
+history_size: 5
+
+hidden_size: 256

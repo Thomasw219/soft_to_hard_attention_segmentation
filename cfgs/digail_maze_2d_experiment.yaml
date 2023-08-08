@@ -1,0 +1,20 @@
+log_dir: 'logs/digail'
+model_load_path: null
+name: 'digail_test'
+device: 'cuda:1'
+log_every: 100
+viz_every: 200
+np_seed: 0
+
+epochs: 4000
+
+train_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}
+test_dataset: {signal_length: 128, data_path: 'data/raw/maze2d-medium-v1.npy'}
+
+dataloader: {batch_size: 64, shuffle: False, num_workers: 0}
+
+defaults:
+  - model: digail
+  - optimizer: digail_optimizer
+
+
