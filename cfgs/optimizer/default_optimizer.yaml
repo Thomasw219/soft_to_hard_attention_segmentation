@@ -1,4 +1,4 @@
 type: adam
 
 grad_clip: 50
-params: {lr: 3e-4, weight_decay: 3e-5}
+params: {lr: 1e-4, weight_decay: 3e-5}

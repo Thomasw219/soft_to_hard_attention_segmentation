@@ -1,8 +1,8 @@
 log_dir: 'logs/vta_maze_eval'
 # model_load_path: 'logs/maze/maze_policy_segmentation_04-03-2023_16-53-45/best_model.pt'
 model_load_path: null
-name: 'vta'
-device: 'cuda:0'
+name: 'with_prior'
+device: 'cuda:1'
 log_every: 250
 viz_every: 500
 np_seed: 0
